@@ -1,0 +1,18 @@
+const List<Map<String, dynamic>> countries = [
+  {'name': "Tanzania", "code": "TZ", "dial_code": "+255"},
+  {'name': "Kenya", "code": "KN", "dial_code": "+254"},
+  {'name': "United States", "code": "US", "dial_code": "+1"},
+  {'name': "Canada", "code": "CA", "dial_code": "+1"},
+  {'name': "Austria", "code": "AT", "dial_code": "+43"},
+  {'name': "Australia", "code": "AU", "dial_code": "+61"},
+  {'name': "Belgium", "code": "BE", "dial_code": "+32"},
+  {'name': "Switzerland", "code": "CH", "dial_code": "+41"},
+  {'name': "Germany", "code": "DE", "dial_code": "+49"},
+  {'name': "Denmark", "code": "DK", "dial_code": "+45"},
+  {'name': "Spain", "code": "ES", "dial_code": "+34"},
+  {'name': "Finland", "code": "FI", "dial_code": "+358"},
+  {'name': "France", "code": "FR", "dial_code": "+33"},
+  {'name': "United Kingdom", "code": "GB", "dial_code": "+44"},
+  {'name': "Hong Kong", "code": "HK", "dial_code": "+852"},
+  {'name': "Italy", "code": "IT", "dial_code": "+39"},
+];
