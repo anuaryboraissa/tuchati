@@ -1,31 +1,50 @@
-import 'dart:convert';
+// ignore_for_file: avoid_single_cascade_in_expression_statements
+
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-import 'package:tuchati/screens/groupcreate/details.dart';
-import 'package:tuchati/services/cloud_messaging.dart';
-import 'package:tuchati/services/secure_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart' as storage;
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
-import 'package:intl/intl.dart';
 import "package:http/http.dart" as http;
-
+import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:tuchati/services/SQLite/groups/participants/participantHelper.dart';
+import 'package:tuchati/services/collectmsgs.dart';
+import 'package:tuchati/services/secure_storage.dart';
 import '../screens/page/progress/progress.dart';
+import 'SQLite/groups/admins/admin.dart';
+import 'SQLite/groups/admins/adminHelper.dart';
+import 'SQLite/groups/group.dart';
+import 'SQLite/groups/groupHelper.dart';
+import 'SQLite/groups/participants/participant.dart';
+import 'SQLite/modelHelpers/dirMsgsHelper.dart';
+import 'SQLite/modelHelpers/directsmsdetails.dart';
+import 'SQLite/modelHelpers/grpDetailsHelper.dart';
+import 'SQLite/modelHelpers/grpMsgsHelper.dart';
+import 'SQLite/modelHelpers/userHelper.dart';
+import 'SQLite/models/dirMessages.dart';
+import 'SQLite/models/groupMessages.dart';
+import 'SQLite/models/grpDetails.dart';
+import 'SQLite/models/msgDetails.dart';
+import 'SQLite/models/user.dart';
+import 'SQLite/updateDetails.dart';
 import 'awesome_notify_fcm.dart';
+import 'groups.dart';
 
 class FirebaseService {
-  Future<bool> postUserData(uid, firstname, lastname, phone, context) async {
+  Future<bool> postUserData(
+      uid, firstname, lastname, phone, context, url) async {
     try {
       DateTime now = DateTime.now();
       var created = DateFormat("yyyy-MM-dd hh:mm:ss").format(now);
       final firebase =
           FirebaseFirestore.instance.collection("Users").doc("$uid");
       // String? notifyToken = await CloudMessaging().getMyToken();
+      DateFormat format = DateFormat("yyyy-MM-dd HH:mm");
+      var lastSeen = format.format(DateTime.now());
       final json = {
         'uid': uid,
         'first_name': firstname,
@@ -33,6 +52,9 @@ class FirebaseService {
         "phone": phone,
         "created": created,
         "notify_token": "",
+        "profile": url,
+        "online_status": false,
+        "last_seen": lastSeen,
         "about": "hey there i'm using Tuchati"
       };
       firebase.set(json);
@@ -139,15 +161,78 @@ class FirebaseService {
   Future storeFirebaseUsersInLocal() async {
     FirebaseFirestore.instance.collection("Users").get().then((value) {
       value.docs.forEach((element) async {
-        print(element['phone']);
-        List<String> user = [
-          element['uid'],
-          element['first_name'],
-          element['last_name']
-        ];
-        StorageItem item = StorageItem(element['phone'], user);
-        await SecureStorageService().writeSecureData(item);
-        print("user saved locally");
+        Box<Uint8List> myProfile = Hive.box<Uint8List>("myProfile");
+        if (myProfile.get(element['uid']) == null) {
+          http.get(Uri.parse(element["profile"])).then((value) {
+            print(
+                "user ${element['first_name']} his profile going to be saved....................");
+            Uint8List bytes = value.bodyBytes;
+            myProfile.put(element['uid'], bytes);
+          });
+        }
+        String userName = "";
+
+        MyUser? result2 = await UserHelper().queryById(element['uid']);
+        SecureStorageService().readCntactsData("contacts").then((cont) async {
+          List cont2 = cont.where((us) {
+            return us[0].toString().replaceAll(" ", "") == element["phone"];
+          }).toList();
+          if (cont2.isNotEmpty) {
+            userName = cont2.single[1];
+          }
+         List<String> user = [
+              element['uid'],
+              userName.isEmpty?element['first_name']:userName,
+              element['last_name']
+            ];
+            if (result2 == null) {
+              StorageItem item = StorageItem(element['phone'], user);
+              await SecureStorageService().writeSecureData(item);
+
+              MyUser userr = MyUser(
+                  id: element['uid'],
+                  firstName: userName.isEmpty?element['first_name']:userName,
+                  profile: element["profile"],
+                  lastName: element['last_name'],
+                  phone: element['phone'],
+                  created: element['created'],
+                  about: element['about']);
+              int result = await UserHelper().insert(userr);
+              if (result > 0) {
+                print("user saved locally_________");
+              }
+            } else {
+              print(
+                  "try___________${result2.firstName} na ${element["first_name"]} na ${userName.isEmpty}");
+              if (userName.isNotEmpty && result2.firstName != userName) {
+                print("going_________________");
+                MyUser user2 = MyUser(
+                    id: element['uid'],
+                    firstName: userName,
+                    profile: element["profile"],
+                    lastName: element['last_name'],
+                    phone: element['phone'],
+                    created: element['created'],
+                    about: element['about']);
+                int result = await UserHelper().update(user2);
+                if (result > 0) {
+                  print("user updated successfully____________");
+                  DirMsgDetails? details =
+                      await DirectSmsDetailsHelper().queryById(element['uid']);
+                  if (details != null) {
+                    DirMsgDetails detail = DirMsgDetails(
+                        name: userName,
+                        userId: element['uid'],
+                        lastMessage: "",
+                        date: "",
+                        time: "",
+                        unSeen: 0);
+                    await DirectSmsDetailsHelper().update(detail);
+                  }
+                }
+              }
+            }
+        });
       });
     });
   }
@@ -177,6 +262,8 @@ class FirebaseService {
       print(
           "completed .................................${msg["msg"]} sent and saved");
     });
+    await CollectMessageData()
+        .storeMessage(message[1].toString(), message[6].toString());
   }
 
   Future sendGrpMessage(List message) async {
@@ -203,6 +290,7 @@ class FirebaseService {
       Box<String> messages = Hive.box<String>("messages");
       messages.put("${message[0]}", "0");
     });
+    CollectMessageData().storeMessage(message[1], message[4]);
   }
 
   Future<bool> checkIfGrpExist(String groupId) async {
@@ -277,11 +365,12 @@ class FirebaseService {
       "decription": group[4],
       "participants": group[5],
       "admins": group[6],
-      "icon": iconPath
+      "icon": iconPath,
+      "creater": group[7]
     };
     firebase.set(grp).whenComplete(() {
-      print(
-          "completed .................................${grp["name"]} saved to firebase");
+      // print(
+      //     "completed .................................${grp["name"]} saved to firebase");
     });
     return true;
   }
@@ -306,7 +395,7 @@ class FirebaseService {
         .child("/${group[0]}");
     uploadTask = ref.putFile(group[3]);
     await uploadTask.whenComplete(() {
-      print("group icon uploaded successfully");
+      // print("group icon uploaded successfully");
     });
     String iconPath = await ref.getDownloadURL();
     final grp = {
@@ -318,37 +407,185 @@ class FirebaseService {
       "admins": admins,
       "icon": iconPath
     };
-    firebase.update(grp).whenComplete(() =>
-        print("group $groupId changes committed successfully............."));
+    firebase.update(grp).whenComplete(() {}
+        // print("group $groupId changes committed successfully.............")
+        );
     return true;
   }
 
   Future<void> leftGroup(String groupId, String uid) async {
     FirebaseFirestore.instance
         .collection("Lefts")
-        .doc("$groupId}")
+        .doc(groupId)
         .get()
         .then((value) {
       final firebase =
           FirebaseFirestore.instance.collection("Lefts").doc(groupId);
 
       if (value.exists) {
-        print("doc exists going to update it...............");
-        List uidd = jsonDecode(value.data()!["uid"]);
+        // print("doc exists going to update it...............");
+        List uidd = value["uids"];
         uidd.add(uid);
-        final json = {"uid": jsonEncode(uidd)};
-        firebase.update(json).whenComplete(
-            () => print("left to group $groupId committed..............."));
+        final json = {"uids": uidd};
+        firebase.update(json).whenComplete(() {
+// print("left to group $groupId committed...............")
+        });
       } else {
-        print("doc doesn't exists going to set it...............");
+        // print("doc doesn't exists going to set it...............");
 
         List uids = [];
         uids.add(uid);
-        final json = {"group_id": groupId, "uid": jsonEncode(uids)};
-        firebase.set(json).whenComplete(
-            () => print("left to group $groupId committed..............."));
+        final json = {"group_id": groupId, "uids": uids};
+        firebase.set(json).whenComplete(() {
+          // print("left to group $groupId committed...............");
+        });
       }
     });
+  }
+
+  checkExistence(String grpId) async {
+    GroupMsgDetails? details = await GroupSmsDetailsHelper().queryById(grpId);
+    if (details == null) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  Future filterMyGroups() async {
+    List<dynamic> logged = await SecureStorageService().readByKeyData("user");
+    if (logged.isNotEmpty) {
+      FirebaseFirestore.instance.collection("Groups").get().then((value) {
+        value.docs
+          ..where((element) => element["participants"].contains(logged[0]))
+              .toList()
+              .forEach((elementt) async {
+            print(
+                "zilizokua filtered is ${elementt["name"]} %%%%%%%%%%%%%%%%%%%%%%");
+            Box<Uint8List> grpIcon = Hive.box<Uint8List>("groups");
+            if (grpIcon.get(elementt['grp_id']) == null) {
+              print(
+                  "changing group icon... ${elementt["name"]}...........%%%%%%%%%%%%%%%%%%.......");
+              http.get(Uri.parse(elementt["icon"])).then((value) {
+                Uint8List bytes = value.bodyBytes;
+                grpIcon.put(elementt['grp_id'], bytes);
+              });
+            }
+
+            GroupModel? group =
+                await GroupHelper().queryById((int.parse(elementt["grp_id"])));
+
+            if (group == null) {
+              GroupModel thisGroup = GroupModel(
+                  name: elementt["name"],
+                  grpId: int.parse(elementt["grp_id"]),
+                  created: elementt["created"],
+                  description: elementt["decription"],
+                  owner: elementt["creater"]);
+
+              int i = await GroupHelper().insert(thisGroup);
+              if (i > 0) {
+//save icon
+                print("saving participants and admins..........");
+                List participants = elementt["participants"];
+                List admins = elementt["admins"];
+                // ignore: avoid_function_literals_in_foreach_calls
+                admins.forEach((element2) async {
+                  AdminModel adminModel =
+                      AdminModel(grpId: elementt["grp_id"], userId: element2);
+                  int a = await AdminHelper().insert(adminModel);
+                  if (a > 0) {
+                    print("admin served successfully...............");
+                  }
+                });
+                participants.forEach((element2) async {
+                  ParticipantModel partModel = ParticipantModel(
+                      grpId: elementt["grp_id"].toString(),
+                      userId: element2,
+                      addedByUserId: logged[0]);
+                  int b = await ParticipantHelper().insert(partModel);
+                  if (b > 0) {
+                    print("participant served successfully...............");
+                  }
+                });
+                GroupModel? group2 = await GroupHelper()
+                    .queryById((int.parse(elementt["grp_id"])));
+                if (group2 != null) {
+                  GroupMsgDetails detail2 = GroupMsgDetails(
+                      name: group2.name,
+                      grpId: group2.grpId,
+                      lastMessage: "",
+                      date: "",
+                      lastSender: "",
+                      unSeen: 0);
+                  int rss = await GroupSmsDetailsHelper().insert(detail2);
+                  if (rss > 0) {
+                    print(
+                        "New group ${group2.name} saved successfully.................");
+                  }
+                }
+              }
+            } else {
+              if (elementt["participants"].toList().contains(logged[0])) {
+                AdminHelper().queryByGrp(elementt["grp_id"]).then((value) {
+                  List admins = elementt["admins"];
+                  if (admins.length != value.length) {
+                    //update participants
+                    List newAdmins = admins
+                        .where(
+                          (element2) {
+                            bool newAdmin = false;
+                            for (var admin in value) {
+                              if (admin!.userId != element2) {
+                                newAdmin = true;
+                              }
+                            }
+                            return newAdmin;
+                          },
+                        )
+                        .toSet()
+                        .toList();
+                    if (newAdmins.isNotEmpty) {
+                      newAdmins.forEach(
+                        (element3) {
+                          AdminHelper()
+                              .queryByUserGroup(element3, elementt["grp_id"])
+                              .then((value2) async {
+                            if (value2 == null) {
+                              //insert new admin
+                              AdminModel adminModel = AdminModel(
+                                  grpId: elementt["grp_id"], userId: element3);
+                              int a = await AdminHelper().insert(adminModel);
+                              if (a > 0) {
+                                print(
+                                    "hey  $element3  %%%%% added  locally success");
+                              }
+                            }
+                          });
+                        },
+                      );
+                    }
+                  }
+                });
+                group.description = elementt["decription"];
+                group.name = elementt["name"];
+                int up = await GroupHelper().update(group);
+                if (up > 0) {
+                  GroupMsgDetails? detail = await GroupSmsDetailsHelper()
+                      .queryById(group.grpId.toString());
+                  if (detail != null) {
+                    detail.name = elementt["name"];
+                    int up2 = await GroupSmsDetailsHelper().update(detail);
+                    if (up2 > 0) {
+                      print("detail updated successfully..");
+                    }
+                  }
+                }
+              }
+            }
+          });
+      });
+    }
   }
 
 //load group replies
@@ -357,98 +594,149 @@ class FirebaseService {
         "loading groups replies.............................................");
     List<dynamic> logged = await SecureStorageService().readByKeyData("user");
     if (logged.isNotEmpty) {
-      List localmsgs =
-          await SecureStorageService().readModalData("grpMessages");
-
       String senderId = logged[0];
-      List mygroups = await SecureStorageService().readModalData("groups");
-      if (mygroups.isNotEmpty) {
-        for (var grp = 0; grp < mygroups.length; grp++) {
-          if (mygroups[grp][4].contains(senderId)) {
-            FirebaseFirestore.instance
-                .collection("GroupMessages")
-                .where("grp_id", isEqualTo: mygroups[grp][0])
-                .get()
-                .then((value) async {
-              value.docs.forEach((element) async {
-                //check if group is participant
+      GroupSmsDetailsHelper().queryAll().then((value) {
+        value.forEach((element) {
+          Box<List<String>> grpLetfs = Hive.box<List<String>>("lefts");
+          if (grpLetfs.get(logged[0]) == null) {
+            retrieveGroupMessage(element!, senderId);
+          } else {
+            bool ameLeft =
+                grpLetfs.get(logged[0])!.contains(element!.grpId.toString());
+            if (!ameLeft) {
+              retrieveGroupMessage(element, senderId);
+            }
+          }
+        });
+      });
+    }
+  }
 
-                List msggg = [
-                  element["msg_id"],
-                  element["msg"],
-                  element["sender"],
-                  element["replied"],
-                  element["created"],
-                  element["grp_id"],
-                  element["sent"],
-                  element["seen"],
-                  element["file_name"],
-                  element["file_size"],
-                  element["replied_msg_id"],
-                  element["replied_msg_sender"],
-                ];
-                Box<String> voicePaths = Hive.box<String>("voice");
-                if (voicePaths.get(element["msg_id"]) == null &&
-                    element["file_name"].toString().contains(".m4a")) {
-                  try {
-                    String fileUri = element["msg_file"].toString();
-                    var response = await http.get(Uri.parse(fileUri));
-                    final Directory directory =
-                        await getApplicationDocumentsDirectory();
-                    final File file = File('${directory.path}/${element["msg_id"]}.m4a');
-                    Uint8List bytes=response.bodyBytes;
-                    file.writeAsBytesSync(bytes);
-                    voicePaths.put(element["msg_id"],"${directory.path}/${element["msg_id"]}.m4a");
-                    print("file from group successfully saved to directory and path to  hive...........");
-                  } catch (e) {
-                    print("failed to write audio file.... from group....");
-                  }
-                }
-                bool tester = false;
-                bool isEmty = false;
-                if (localmsgs.isEmpty) {
-                  localmsgs.add(msggg);
-                  isEmty = true;
-                  Modal mysms = Modal("grpMessages", localmsgs);
-                  await SecureStorageService().writeModalData(mysms);
-                } else {
-                  List seen = element["seen"];
-                  for (var msg = 0; msg < localmsgs.length; msg++) {
-                    if (localmsgs[msg][0] == element["msg_id"]) {
-                      tester = true;
+  void retrieveGroupMessage(GroupMsgDetails element, String senderId) {
+    FirebaseFirestore.instance
+        .collection("GroupMessages")
+        .where("grp_id", isEqualTo: element.grpId.toString())
+        .where("sender", isNotEqualTo: senderId)
+        .get()
+        .then((value) async {
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> newData = value.docs
+          .where((element) => !element["seen"].toList().contains(senderId))
+          .toList();
+      // print(
+      //     "messages ${value.docs.length} ******************************** na ${newData.length}****");
+      if (newData.isNotEmpty) {
+        int unSeen = newData.length;
+        QueryDocumentSnapshot<Map<String, dynamic>> lastData = newData.last;
+        String lastMessage = lastData["msg"];
+        String lastSender = "";
+        MyUser? result2 = await UserHelper().queryById(lastData["sender"]);
+        if (result2 != null) {
+          lastSender = result2.firstName;
+        }
+        String date = lastData["created"];
+        int groupId = element.grpId;
+        String groupName = element.name;
 
-                      if (element["seen"] != localmsgs[msg][7]) {
-                        //there is changes
-                        if (element["sender"] != senderId &&
-                            !seen.contains(senderId)) {
-                          // print(
-                          //     "changess performed in message ${localmsgs[msg][1]}........");
+        newData.forEach((element) async {
+          GroupMessage? result2 =
+              await GrpMsgsHelper().queryById(int.parse(element["msg_id"]));
+          if (result2 == null) {
+            //sendNotify
+            Box<int> channel = Hive.box<int>("channels");
+            if (channel.get(groupId.toString()) == null) {
+              int userchannel = UniqueKey().hashCode;
+              channel.put(groupId.toString(), userchannel);
+            }
+            Map<String, String> payload = {
+              "user": groupId.toString(),
+              "name": groupName,
+              "lastMessage": lastMessage,
+              "date": date,
+              "time": date
+            };
 
-                          localmsgs[msg][7] = seen;
-                          Modal mysms = Modal("grpMessages", localmsgs);
-                          await SecureStorageService().writeModalData(mysms);
-                          // print("changess performed written sucesssssssfull");
-                        }
+            await AwesomeNotifyFcm.instantNotify(
+                "$groupName ($unSeen messages)",
+                lastMessage,
+                payload,
+                channel.get(groupId.toString())!);
+
+            GroupMessage grpMsg = GroupMessage(
+                msgId: int.parse(element["msg_id"]),
+                msg: element["msg"],
+                sender: element["sender"],
+                grpId: element["grp_id"],
+                replied: element["replied"],
+                repliedMsgId: element["replied_msg_id"],
+                date: element["created"],
+                fileName: element["file_name"],
+                msgFile: element["msg_file"],
+                fileSize: element["file_size"],
+                repliedMsgSender: element["replied_msg_sender"]);
+            int result = await GrpMsgsHelper().insert(grpMsg);
+            if (result > 0) {
+              if (element["msg_file"] != "0" &&
+                  element["msg_file"] != "" &&
+                  !element["file_name"].toString().contains(".m4a")) {
+                // print(
+                //     "message file going to be loaded..............${element["msg_file"]}");
+                saveMessageFile(element["msg_id"], element["msg_file"]);
+              }
+              List saws = element["seen"];
+              ParticipantHelper().queryByGrp(element["grp_id"]).then((value) {
+                if (saws.length == value.length) {
+                  DocumentReference ref = FirebaseFirestore.instance
+                      .collection("GroupMessages")
+                      .doc(element["msg_id"]);
+                  ref.get().then((value) {
+                    if (value.exists) {
+                      ref.delete();
+                      // print(
+                      //     "group message ${element["msg"]} deleted successfully......................");
+                      if (value["msg_file"].toString().isNotEmpty &&
+                          value["msg_file"].toString() != "0") {
+                        storage.FirebaseStorage.instance
+                            .ref()
+                            .child("MessageFiles")
+                            .child("/${value["msg_id"]}")
+                            .delete();
                       }
                     }
-                  }
-                }
-                if (!isEmty && !tester) {
-                  localmsgs.add(msggg);
-                  Modal mysms = Modal("grpMessages", localmsgs);
-                  await SecureStorageService().writeModalData(mysms);
-                }
-                if (element["msg_file"] != "0" && element["msg_file"] != "" && !element["file_name"].toString().contains(".m4a")) {
-                  // print(
-                  //     "message file going to be loaded..............${element["msg_file"]}");
-                  saveMessageFile(element["msg_id"], element["msg_file"]);
+                  });
                 }
               });
-            });
+              Box<String> voicePaths = Hive.box<String>("voice");
+              if (voicePaths.get(element["msg_id"]) == null &&
+                  element["file_name"].toString().contains(".m4a")) {
+                try {
+                  String fileUri = element["msg_file"].toString();
+                  var response = await http.get(Uri.parse(fileUri));
+                  final Directory directory =
+                      await getApplicationDocumentsDirectory();
+                  final File file =
+                      File('${directory.path}/${element["msg_id"]}.m4a');
+                  Uint8List bytes = response.bodyBytes;
+                  file.writeAsBytesSync(bytes);
+                  voicePaths.put(element["msg_id"],
+                      "${directory.path}/${element["msg_id"]}.m4a");
+                  // print(
+                  //     "file from group successfully saved to directory and path to  hive...........");
+                } catch (e) {
+                  // print("failed to write audio file.... from group....");
+                }
+              }
+            }
+          } else {
+            print("message already existsssssssssss.....");
           }
-        }
+        });
+
+        UpdateDetails().updateGroupDetails(
+            lastMessage, lastSender, date, groupId.toString(), unSeen);
+      } else {
+        print("for this group ${element.name} no new message");
       }
-    }
+    });
   }
 
   Future receiveMsgAndSaveLocal() async {
@@ -459,94 +747,162 @@ class FirebaseService {
           .collection("Messages")
           .get()
           .then((value) async {
-        List localmsgs =
-            await SecureStorageService().readAllMsgData("messages");
-
         String senderId = logged[0];
         value.docs.forEach((element) async {
           if (element["receiver"] == senderId) {
-            //             "file_name":message[10],
-            // "file_size":message[11]
-            //save file image
-            if (element["msg_file"] != "0" && element["msg_file"] != "" && !element["file_name"].toString().contains(".m4a")) {
-              saveMessageFile(element["msg_id"], element["msg_file"]);
-            }
-            List msggg = [
-              element["msg_id"],
-              element["msg"],
-              element["sender"],
-              element["receiver"],
-              element["replied"],
-              element["seen"],
-              element["date"],
-              element["time"],
-              element["file_name"],
-              element["file_size"],
-              element["replied_msg_id"]
-            ];
-        Box<String> voicePaths = Hive.box<String>("voice");
-        if (voicePaths.get(element["msg_id"]) == null &&
-                    element["file_name"].toString().contains(".m4a")) {
-                  try {
-                    String fileUri = element["msg_file"].toString();
-                    var response = await http.get(Uri.parse(fileUri));
-                    final Directory directory =
-                        await getApplicationDocumentsDirectory();
-                    final File file = File('${directory.path}/${element["msg_id"]}.m4a');
-                    Uint8List bytes=response.bodyBytes;
-                    file.writeAsBytesSync(bytes);
-                    voicePaths.put(element["msg_id"],"${directory.path}/${element["msg_id"]}.m4a");
-                    print("file from user successfully saved to directory and path to  hive...........");
-                  } catch (e) {
-                    print("failed to write audio file from user........");
-                  }
-                }
+            DirectMessage? result =
+                await DirMsgsHelper().queryById(int.parse(element["msg_id"]));
+            if (result == null) {
+              print("this message is new ${element["msg"]}.....");
 
-            bool tester = false;
-            bool changes = false;
-            for (var msg = 0; msg < localmsgs.length; msg++) {
-              if (localmsgs[msg][5] == "1") {
-                Box<String> messages = Hive.box<String>("messages");
-                messages.put("${localmsgs[msg][0]}", "1");
-                //delete message
+              DirectMessage directMsg = DirectMessage(
+                  msgId: int.parse(element["msg_id"]),
+                  msg: element["msg"],
+                  sender: element["sender"],
+                  receiver: element["receiver"],
+                  replied: element["replied"],
+                  repliedMsgId: element["replied_msg_id"],
+                  seen: element["seen"],
+                  time: element["time"],
+                  date: element["date"],
+                  fileName: element["file_name"],
+                  msgFile: element["msg_file"],
+                  fileSize: element["file_size"]);
+              int res = await DirMsgsHelper().insert(directMsg);
+              if (res > 0) {
+                print(
+                    "msg ${element["msg"]} received now....... wait for notify");
+                UserHelper().queryUserToMe(senderId).then((value) {
+                  value.forEach(
+                    (user) {
+                      print("user  ${user!.firstName}.......");
+                      Box<int> channel = Hive.box<int>("channels");
+                      if (channel.get(user.id) == null) {
+                        int userchannel = UniqueKey().hashCode;
+                        channel.put(user.id, userchannel);
+                      }
+                      DirMsgsHelper()
+                          .querySmsDetails(user.id)
+                          .then((value) async {
+                        if (value.isNotEmpty) {
+                          DirectMessage? msgg = value.toList().last;
+                          Map<String, String> payload = {
+                            "user": user.id.toString(),
+                            "name": user.firstName,
+                            "lastMessage": msgg!.msg,
+                            "date": msgg.date,
+                            "time": msgg.time
+                          };
+
+                          await AwesomeNotifyFcm.instantNotify(
+                              "${user.firstName}(${value.length} messages)",
+                              msgg.msg,
+                              payload,
+                              channel.get(user.id)!);
+
+                          DirMsgDetails? details =
+                              await DirectSmsDetailsHelper().queryById(user.id);
+                          if (details == null) {
+                            DirMsgDetails detail = DirMsgDetails(
+                                name: user.firstName,
+                                userId: user.id,
+                                lastMessage: msgg.msg,
+                                date: msgg.date,
+                                time: msgg.time,
+                                unSeen: value.length);
+                            int rss =
+                                await DirectSmsDetailsHelper().insert(detail);
+                            if (rss > 0) {
+                              print("details uploaded success.........");
+                              DirMsgDetails? detail =
+                                  await DirectSmsDetailsHelper()
+                                      .queryById(user.id);
+                              print(
+                                  "my details ${detail!.name} ${detail.lastMessage}");
+                            }
+                          } else if (details.unSeen != value.length) {
+                            details.unSeen = value.length;
+                            details.lastMessage = msgg.msg;
+                            int rss =
+                                await DirectSmsDetailsHelper().update(details);
+                            if (rss > 0) {
+                              print("details updated success.........");
+                              DirMsgDetails? detail =
+                                  await DirectSmsDetailsHelper()
+                                      .queryById(user.id);
+                              print(
+                                  "my details ${detail!.name} ${detail.lastMessage}");
+                            }
+                          }
+                        }
+                      });
+                    },
+                  );
+                });
+              }
+              Box<String> voicePaths = Hive.box<String>("voice");
+              if (voicePaths.get(element["msg_id"]) == null &&
+                  element["file_name"].toString().contains(".m4a")) {
                 try {
-                  DocumentReference refs = FirebaseFirestore.instance
-                      .collection('Messages')
-                      .doc(localmsgs[msg][0]);
-                  refs.get().then((value) {
-                    if (value.exists) {
-                      refs.delete();
-                      print(
-                          "message  ${element["msg"]}...........deleted success from firebase");
-                      storage.Reference ref = storage.FirebaseStorage.instance
-                          .ref()
-                          .child("MessageFiles")
-                          .child("/${localmsgs[msg][0]}");
-
-                      ref.delete();
-                    }
-                  }).whenComplete(() {
-                    print("object succesfulyy deleted...............");
-                  });
+                  String fileUri = element["msg_file"].toString();
+                  var response = await http.get(Uri.parse(fileUri));
+                  final Directory directory =
+                      await getApplicationDocumentsDirectory();
+                  final File file =
+                      File('${directory.path}/${element["msg_id"]}.m4a');
+                  Uint8List bytes = response.bodyBytes;
+                  file.writeAsBytesSync(bytes);
+                  voicePaths.put(element["msg_id"],
+                      "${directory.path}/${element["msg_id"]}.m4a");
+                  // print(
+                  //     "file from user successfully saved to directory and path to  hive...........");
                 } catch (e) {
-                  // print("failed deleting item ${element["msg_id"]}...........");
+                  print("failed to write audio file from user........");
                 }
               }
-              if (element["msg_id"] == localmsgs[msg][0]) {
-                tester = true;
+              try {
+                FirebaseFirestore.instance
+                    .collection('Messages')
+                    .where("seen", isEqualTo: "1")
+                    .get()
+                    .then((value) {
+                  value.docs.forEach((elementt) {
+                    Box<String> msgs = Hive.box<String>("messages");
+                    if (elementt.exists &&
+                        msgs.get(elementt["msg_id"]) == "1") {
+                      FirebaseFirestore.instance
+                          .collection('Messages')
+                          .doc(elementt["msg_id"])
+                          .delete();
+                      // print(
+                      //     "message  ${element["msg"]}...........deleted success from firebase");
+                      if (elementt["msg_file"] != "" ||
+                          elementt["msg_file"] != "0") {
+                        storage.Reference ref = storage.FirebaseStorage.instance
+                            .ref()
+                            .child("MessageFiles")
+                            .child("/${elementt["msg_id"]}");
+                        ref.delete();
+                      }
+                    }
+                  });
+                });
+              } catch (e) {
+                // print("failed deleting item ${element["msg_id"]}...........");
               }
-            }
-
-            if (!tester) {
-              localmsgs.add(msggg);
+              if (element["msg_file"] != "0" &&
+                  element["msg_file"] != "" &&
+                  !element["file_name"].toString().contains(".m4a")) {
+                saveMessageFile(element["msg_id"], element["msg_file"]);
+              }
+            } else {
+              print("this msg  ${element["msg"]}already exist *************");
             }
           }
         });
 
-        Message mysmss = Message("messages", localmsgs);
-        await SecureStorageService().writeMsgData(mysmss);
+        // print(" firebase........ load success.");
       });
-      print(" firebase........ load success.");
     }
   }
 
@@ -556,250 +912,11 @@ class FirebaseService {
       await http.get(Uri.parse(fileUrl)).then((value) {
         Uint8List bytes = value.bodyBytes;
         msgFiles.put(msgId, bytes);
-        print("image of message $msgId saved to hive.......");
+        // print("image of message $msgId saved to hive.......");
       });
     }
   }
 
-  Future groupMsgsDetails() async {
-    await receiveGroupsMsgAndSaveLocal();
-    // await SecureStorageService().deleteByKeySecureData("grpSmsDetails");
-    // print("hellow group access vpii.....................");
-    List mygroups = await SecureStorageService().readModalData("groups");
-
-    List groupMessages =
-        await SecureStorageService().readModalData("grpMessages");
-    List<dynamic> logged = await SecureStorageService().readByKeyData("user");
-    Box<String> simples = Hive.box<String>("simples");
-    if (logged.isNotEmpty) {
-      List grpSmsDetails =
-          await SecureStorageService().readUsersSentToMe("grpSmsDetails");
-
-      String mimi = logged[0];
-      var totalGrpsms = 0;
-      for (var grp in mygroups) {
-        List participants = grp[4];
-        if (participants.contains(mimi)) {
-          // print(
-          //     "yeah group .............${grp[1]}............nipo mimi ............$mimi");
-          List group = [];
-          var unreaded = 0;
-          var lastMsg = "";
-          var lastMsgUnseen = "";
-          var lastMsgunseenSender = "";
-          var timeSent = "";
-          List unseenMsgs = [];
-
-          for (var msg = 0; msg < groupMessages.length; msg++) {
-            List unseen = [];
-            if (grp[0] == groupMessages[msg][5]) {
-              // print("imeingia apaa..........ety");
-              List seen = groupMessages[msg][7];
-              // print("seen wote $seen    na mimi apaaaaaaaaaaa $mimi");
-              if (groupMessages[msg][2] != mimi && !seen.contains(mimi)) {
-                // print(
-                //     "yess this message ................${groupMessages[msg][1]} n $mimi cjaonaaaaaaaaaaaaaaaaaaaaaaaaaa ");
-                print("unreaded going to be added...........$unreaded. ");
-                unreaded = unreaded + 1;
-                print("unreaded added sucess added...........$unreaded. ");
-
-                lastMsgUnseen = groupMessages[msg][1];
-
-                lastMsgunseenSender = groupMessages[msg][2];
-                print(
-                    "unreaded added $lastMsgUnseen and sender $lastMsgunseenSender as sender ");
-                unseen.add(groupMessages[msg][2]);
-                unseen.add(groupMessages[msg][1]);
-
-                if (unseen.isNotEmpty) {
-                  unseenMsgs.add(unseen);
-                }
-              }
-              lastMsg = groupMessages[msg][1];
-              var format = DateFormat("yyyy-MM-dd");
-              var now = format.format(DateTime.now());
-              timeSent =
-                  groupMessages[msg][4].toString().split(" ").removeAt(0);
-              if (timeSent == now) {
-                timeSent =
-                    groupMessages[msg][4].toString().split(" ").removeAt(1);
-              }
-            }
-          }
-          print(
-              "apaaaa njeeeeeeeeeee $lastMsgUnseen and sender $lastMsgunseenSender as sender njeeeeeeeeeee");
-          group.add(grp[0]);
-          group.add(grp[1]);
-          group.add(unreaded);
-          group.add(lastMsg);
-          group.add(timeSent);
-          group.add(unseenMsgs);
-          group.add(grp[4]);
-          group.add(grp[5]);
-          group.add(lastMsgUnseen);
-          group.add(lastMsgunseenSender);
-
-          if (unreaded != 0) {
-            totalGrpsms = totalGrpsms + 1;
-          }
-          group.add(totalGrpsms);
-          bool tester2 = false;
-          bool changes = false;
-          bool isEmptyy = false;
-          if (grpSmsDetails.isEmpty) {
-            isEmptyy = true;
-            grpSmsDetails.add(group);
-          } else {
-            for (var us = 0; us < grpSmsDetails.length; us++) {
-              if (grp[0] == grpSmsDetails[us][0]) {
-                tester2 = true;
-              }
-              if (grp[0] == grpSmsDetails[us][0]) {
-                if (lastMsg != grpSmsDetails[us][3]) {
-                  grpSmsDetails[us][3] = lastMsg;
-                }
-                if (unreaded != grpSmsDetails[us][2]) {
-                  if (unreaded > grpSmsDetails[us][2]) {
-                    print("unreaded is greater than iliyokuwepo............");
-                    changes = true;
-                    simples.delete(grp[0]);
-                  }
-                  grpSmsDetails[us][2] = unreaded;
-
-                  print(
-                      "updating sender and last unseeeeeeen $lastMsgUnseen and sender $lastMsgunseenSender");
-                  grpSmsDetails[us][9] = lastMsgUnseen;
-                  grpSmsDetails[us][10] = lastMsgunseenSender;
-                }
-                if (timeSent != grpSmsDetails[us][4]) {
-                  grpSmsDetails[us][4] = timeSent;
-                }
-              }
-            }
-          }
-
-          if (!tester2 && !isEmptyy) {
-            grpSmsDetails.add(group);
-          }
-        }
-      }
-      //save groupMembers
-
-      Box<String> myGrpSms = Hive.box<String>("simples");
-      myGrpSms.put("grpMessags", totalGrpsms.toString());
-      await SecureStorageService().deleteByKeySecureData("totalGrpSms");
-      List newSorted = grpSmsDetails
-        ..sort((a, b) {
-          if (a[4].toString().length == b[4].toString().length) {
-            return a[4].toString().compareTo(b[4].toString());
-          } else {
-            return b[4].toString().length.compareTo(a[4].toString().length);
-          }
-        });
-      Modal grpdetails = Modal("grpSmsDetails", newSorted);
-      await SecureStorageService().writeModalData(grpdetails);
-      //send push notification
-
-      List groupMemberss =
-          await SecureStorageService().readModalData("groupMembers");
-      List groupAdminss =
-          await SecureStorageService().readModalData("groupAdmins");
-      for (var memb in grpSmsDetails) {
-        List mymembers = [];
-        List myadmins = [];
-
-        List members = memb[6];
-        List admins = memb[7];
-        List newmembers = [];
-        List newadmins = [];
-        for (var user in members) {
-          List member = [];
-          FirebaseFirestore.instance
-              .collection("Users")
-              .doc(user)
-              .get()
-              .then((value) {
-            member.add(value["first_name"]);
-            member.add(value["last_name"]);
-            member.add(value["phone"]);
-            member.add(value["uid"]);
-          }).then((value) async {
-            newmembers.add(member);
-            if (newmembers.length == members.length) {
-              mymembers.add(memb[0]);
-              mymembers.add(newmembers);
-              bool tester = false;
-              bool isEmptt = false;
-              if (groupMemberss.isEmpty) {
-                isEmptt = true;
-                if (mymembers.isNotEmpty) {
-                  groupMemberss.add(mymembers);
-                }
-              } else {
-                for (var m = 0; m < groupMemberss.length; m++) {
-                  if (memb[0] == groupMemberss[m][0]) {
-                    tester = true;
-                  }
-                }
-              }
-              if (!tester && !isEmptt) {
-                groupMemberss.add(mymembers);
-              }
-              Modal groupMemb = Modal("groupMembers", groupMemberss);
-              await SecureStorageService().writeModalData(groupMemb);
-
-              if (groupMemberss.isNotEmpty) {
-                print("now nityfy...... on group............");
-
-                sendPushMsgdeatils();
-              }
-            }
-          });
-        }
-
-        for (var adm in admins) {
-          List admm = [];
-          FirebaseFirestore.instance
-              .collection("Users")
-              .doc(adm)
-              .get()
-              .then((value) {
-            admm.add(value["first_name"]);
-            admm.add(value["last_name"]);
-            admm.add(value["phone"]);
-            admm.add(value["uid"]);
-          }).then((value) async {
-            newadmins.add(admm);
-            if (newadmins.length == admins.length) {
-              myadmins.add(memb[0]);
-              myadmins.add(newadmins);
-              bool tester2 = false;
-              bool isEmptt2 = false;
-              if (groupAdminss.isEmpty) {
-                isEmptt2 = true;
-                if (myadmins.isNotEmpty) {
-                  groupAdminss.add(myadmins);
-                }
-              } else {
-                for (var m = 0; m < groupAdminss.length; m++) {
-                  if (memb[0] == groupAdminss[m][0]) {
-                    tester2 = true;
-                  }
-                }
-              }
-              if (!tester2 && !isEmptt2) {
-                groupAdminss.add(myadmins);
-              }
-              Modal groupAdm = Modal("groupAdmins", groupAdminss);
-              await SecureStorageService().writeModalData(groupAdm);
-            }
-          });
-        }
-
-        // print("group admins $groupAdmins");
-      }
-    }
-  }
 
   sendPushMsgdeatils() async {
     List notifGrpdetails =
@@ -816,9 +933,11 @@ class FirebaseService {
             for (var memb in groupMemberss) {
               if (memb[0] == grp[0]) {
                 for (var mid in memb[1]) {
-                  // print("print compare apa ivi in notify................${mid[3]} na  ${element["uid"]}");
-                  if (mid[3] == element["uid"]) {
-                    isMember = true;
+                  if (mid.length < 4) {
+                  } else {
+                    if (mid[3] == element["uid"]) {
+                      isMember = true;
+                    }
                   }
                 }
               }
@@ -830,7 +949,7 @@ class FirebaseService {
           }
           if (myDetails.isNotEmpty) {
             //send push message
-            print("primary sending notify.................");
+            // print("primary sending notify.................");
             Box<String> simples = Hive.box<String>("simples");
             for (var grp in myDetails) {
               String name = "";
@@ -851,8 +970,8 @@ class FirebaseService {
               //  simples.delete(grp[0]);
               if (simples.get(grp[0]) == null && grp[2] > 0) {
                 simples.put(grp[0], "1");
-                print(
-                    "message going to be posted..........fro group ${grp[1]}.......................");
+                // print(
+                //     "message going to be posted..........fro group ${grp[1]}.......................");
                 Map<String, String> payload = {
                   "user": grp[0].toString(),
                   "name": "${grp[1]}"
@@ -870,135 +989,7 @@ class FirebaseService {
         });
       });
     } catch (e) {
-      print("no stable internet to do this notify..................");
-    }
-  }
-
-  Future usersSentMsgsToMe() async {
-    // await SecureStorageService().deleteByKeySecureData("usersToMe");
-    print("wait for loading userss sent to mimi.......................");
-    List<dynamic> logged = await SecureStorageService().readByKeyData("user");
-    Box<String> simples = Hive.box<String>("simples");
-    if (logged.isNotEmpty) {
-      String senderId = logged[0];
-      FirebaseFirestore.instance
-          .collection("Users")
-          .where("uid", isNotEqualTo: logged[0])
-          .get()
-          .then((user) async {
-        // print("key user sent exists  .........");
-
-        List sentToMe =
-            await SecureStorageService().readUsersSentToMe("usersToMe");
-        List localmsgs =
-            await SecureStorageService().readAllMsgData("messages");
-        int totalMsgs = 0;
-        user.docs.forEach((element) {
-          if (element["uid"] != senderId) {
-            List userrr = [
-              element["uid"],
-              element["first_name"],
-              element["last_name"],
-              element["phone"],
-              element["created"],
-              element["notify_token"],
-            ];
-
-            int numberMsgs = 0;
-            String lastMsg = "";
-            String timeSent = "";
-            bool sentReceiver = false;
-            String msgId = '';
-            for (var msg = 0; msg < localmsgs.length; msg++) {
-              if (element["uid"] == localmsgs[msg][2] &&
-                  senderId == localmsgs[msg][3] &&
-                  localmsgs[msg][5] == "0") {
-                // print("this message ${localmsgs[msg][1]}    not seen already local message senn ${localmsgs[msg][5]}" );
-                numberMsgs = numberMsgs + 1;
-              }
-              if ((element["uid"] == localmsgs[msg][3] &&
-                      senderId == localmsgs[msg][2]) ||
-                  (element["uid"] == localmsgs[msg][2] &&
-                      senderId == localmsgs[msg][3])) {
-                sentReceiver = true;
-                if (localmsgs[msg][2] == senderId) {
-                  lastMsg = "you: ${localmsgs[msg][1]}";
-                } else {
-                  lastMsg = "${localmsgs[msg][1]}";
-                }
-                timeSent = localmsgs[msg][7];
-              }
-            }
-            // print("users sent to me total em apaaa ${sentToMe[0].length}");
-            bool tester2 = false;
-            bool isEmptyy = false;
-            if (numberMsgs != 0) {
-              totalMsgs = totalMsgs + 1;
-            }
-
-            // print("tester is ..........$tester2 user.........${element["uid"]} ");
-            userrr.add(numberMsgs);
-            userrr.add(lastMsg);
-            userrr.add(timeSent);
-            userrr.add(element["about"]);
-            userrr.add(totalMsgs);
-            bool changes = true;
-            if (sentToMe.isEmpty && sentReceiver) {
-              isEmptyy = true;
-
-              sentToMe.add(userrr);
-            } else {
-              for (var us = 0; us < sentToMe.length; us++) {
-                // print(
-                //     "compare ;;;;;;;;;;;;;;;;;;....... ${element["uid"]}.............${sentToMe[us][0]}");
-                if (element["uid"] == sentToMe[us][0]) {
-                  tester2 = true;
-                }
-                if (element["uid"] == sentToMe[us][0]) {
-                  if (lastMsg != sentToMe[us][7]) {
-                    // print(
-                    //     "changesssssss.......${element["uid"]} with last msg..........$lastMsg");
-                    sentToMe[us][7] = lastMsg;
-                  }
-                  if (numberMsgs != sentToMe[us][6]) {
-                    if (numberMsgs > sentToMe[us][6]) {
-                      print("unreaded is greater than iliyokuwepo............");
-                      changes = true;
-                      simples.delete(sentToMe[us][0]);
-                    }
-                    sentToMe[us][6] = numberMsgs;
-                  }
-                  if (timeSent != sentToMe[us][8]) {
-                    sentToMe[us][8] = timeSent;
-                    // print(
-                    //     "changesssssss.......${element["uid"]} with time sent msg..........$timeSent");
-                  }
-                }
-              }
-            }
-
-            if (!tester2 && sentReceiver && !isEmptyy) {
-              sentToMe.add(userrr);
-            }
-          }
-        });
-        //write toal sms
-        simples.delete("totalSms");
-        // simples.put("totalSms", totalMsgs.toString());
-        List newSorted = sentToMe
-          ..sort((a, b) {
-            if (a[8].toString().length == b[8].toString().length) {
-              return a[8].toString().compareTo(b[8].toString());
-            } else {
-              return b[4].toString().length.compareTo(a[4].toString().length);
-            }
-          });
-        Userr myuser = Userr("usersToMe", newSorted);
-        await SecureStorageService().writeUserSentToMe(myuser);
-        //send notifications
-        sendUserNotication();
-        print("writting userss........");
-      });
+      // print("no stable internet to do this notify..................");
     }
   }
 
@@ -1013,8 +1004,8 @@ class FirebaseService {
         channel.put(user[0], userchannel);
       }
       if (simples.get(user[0]) == null && user[6] > 0) {
-        print(
-            "now sending messages to the clound for notify userssss to ${logged[4]}");
+        // print(
+        //     "now sending messages to the clound for notify userssss to ${logged[4]}");
         simples.put(user[0], "1");
         Map<String, String> payload = {
           "user": user[0].toString(),
@@ -1036,9 +1027,9 @@ class FirebaseService {
         .collection("Messages")
         .doc("${message["msg_id"]}");
     firebase.update(message).whenComplete(() {
-      print("update commited success..........");
+      // print("update commited success..........");
     }).then((value) {
-      print("message ...........$message updated.....");
+      // print("message ...........$message updated.....");
     });
   }
 
@@ -1059,7 +1050,7 @@ class FirebaseService {
       String filePath = await ref.getDownloadURL();
       attributes[9] = filePath;
       await FirebaseService().sendMessage(attributes);
-      print("sent to firebase");
+      // print("sent to firebase");
       await Progresshud.mySnackBar(
           context, "file for message $msgId uploaded successfully....");
     });

@@ -4,7 +4,8 @@ class AppColors {
   AppColors._();
 
   static Color primaryColor = const Color(0xff166aff);
-  static Color appColor = Color.fromARGB(255, 7, 142, 221);
+  static Color appColor2=Color.fromARGB(255, 2, 17, 20);
+  static Color appColor = Color(0xff0081A0);
   static Color gray = const Color(0xffb5b6b8);
   static Color green = const Color(0xff1EC27A);
   static Color redColor = const Color(0xfffc1111);

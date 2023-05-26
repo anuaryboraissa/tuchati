@@ -9,6 +9,7 @@ import 'dart:math';
 import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:tuchati/constants/app_colors.dart';
 import 'package:tuchati/screens/page/progress/progress.dart';
+import 'package:tuchati/services/SQLite/updateDetails.dart';
 import 'package:tuchati/services/groups.dart';
 import 'package:tuchati/services/secure_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -17,6 +18,12 @@ import 'package:flutter/animation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import 'SQLite/modelHelpers/dirMsgsHelper.dart';
+import 'SQLite/modelHelpers/directsmsdetails.dart';
+import 'SQLite/modelHelpers/grpMsgsHelper.dart';
+import 'SQLite/models/dirMessages.dart';
+import 'SQLite/models/groupMessages.dart';
+import 'SQLite/models/msgDetails.dart';
 import 'firebase.dart';
 
 class AwesomeNotifyFcm {
@@ -27,7 +34,7 @@ class AwesomeNotifyFcm {
     //null for default icon 'resource://drawable/res_notification_app_icon',
     AwesomeNotifications().initialize(null, [
       NotificationChannel(
-          channelKey: "instant_notifications",
+          channelKey: "basic_channel",
           channelGroupKey: "tuchati_wote",
           groupKey: "tuchati",
           groupSort: GroupSort.Desc,
@@ -55,7 +62,7 @@ class AwesomeNotifyFcm {
             summary: "from 2 chats",
             id: channel,
             title: title,
-            channelKey: "instant_notifications",
+            channelKey: "basic_channel",
             body: body,
             payload: payload),
         actionButtons: [
@@ -109,26 +116,24 @@ class AwesomeNotifyFcm {
     attributes.add("");
 
     List msgs = [];
-
-    List messgs = await SecureStorageService().readAllMsgData("messages");
-    if (messgs.isNotEmpty) {
-      for (var x = 0; x < messgs.length; x++) {
-        msgs.add(messgs[x]);
-      }
-
-      msgs.add(attributes);
-
-      Message mysms = Message("messages", msgs);
-      await SecureStorageService().writeMsgData(mysms);
-    } else {
-      msgs.add(attributes);
-
-      Message mysms = Message("messages", msgs);
-      await SecureStorageService().writeMsgData(mysms);
+    DirectMessage directMsg = DirectMessage(
+        msgId: int.parse(attributes[0]),
+        msg: attributes[1],
+        sender: attributes[2],
+        receiver: attributes[3],
+        replied: attributes[4],
+        repliedMsgId: attributes[10],
+        seen: attributes[5],
+        time: now,
+        date: nowDate,
+        fileName: attributes[8],
+        msgFile: "0",
+        fileSize: attributes[9]);
+    int result = await DirMsgsHelper().insert(directMsg);
+    if (result > 0) {
+      print("data inserted successfully..........");
+        UpdateDetails().updateUserDetails(attributes[1], now, nowDate,attributes[3]);
     }
-
-    print("now send msg from notification..................success");
-
     await FirebaseService().sendMessage(attributes);
   }
 
@@ -161,21 +166,35 @@ class AwesomeNotifyFcm {
     attributes.add("");
     attributes.add("");
 
-    List grpMsgs = await SecureStorageService().readModalData("grpMessages");
-    grpMsgs.add(attributes);
-    Modal modal = Modal("grpMessages", grpMsgs);
-    await SecureStorageService().writeModalData(modal);
-
-    // loadGrpMsgs();
-
+   GroupMessage grpMsg = GroupMessage(
+        msgId: int.parse(attributes[0]),
+        msg: attributes[1],
+        sender: attributes[2],
+        grpId: receiver,
+        replied: "",
+        repliedMsgId: "",
+        date: nowDate,
+        fileName: attributes[8],
+        msgFile: "0",
+        fileSize: attributes[9],
+        repliedMsgSender: "");
+    int result = await GrpMsgsHelper().insert(grpMsg);
+    if (result > 0) {
+        UpdateDetails().updateGroupDetails(attributes[1], "you", nowDate,
+           receiver.toString(),0);
+    }
     await GroupService().saveGrpMessages(attributes, null);
   }
 
   listernActions() {
     AwesomeNotifications().actionStream.listen((notificaton) async {
+      
       Map<String, String>? payload = notificaton.payload;
       String userId = payload!["user"].toString();
       String name = payload["name"].toString();
+      String lastMsg=payload["lastMessage"].toString();
+      String date=payload["date"].toString();
+      String time=payload["time"].toString();
       if (notificaton.buttonKeyPressed == "reply") {
         if (notificaton.buttonKeyInput.isNotEmpty) {
           // print("no reply made.............");
@@ -184,105 +203,92 @@ class AwesomeNotifyFcm {
             //group msg
             sendGrpMessage(message, userId);
           } else {
-            //user message
             sendMessage(message, userId);
           }
-
-          print("Reply text now button is pressed $message");
+           await markRead(userId,lastMsg,time,date);
         }
       } else if (notificaton.buttonKeyPressed == "mark") {
         //mark as read
-        List<dynamic> logged =
-            await SecureStorageService().readByKeyData("user");
-        if (isNumeric(userId)) {
-          //group msg
-          //group
+        await markRead(userId,lastMsg,time,date);
 
-          String whoSee = logged[0];
-
-          FirebaseFirestore.instance
-              .collection("GroupMessages")
-              .where("grp_id", isEqualTo: userId)
-              .get()
-              .then((value) {
-            value.docs.forEach((element) {
-              List saws = element["seen"];
-              bool see = false;
-              if (saws.isEmpty) {
-                saws.add(whoSee);
-              } else {
-                for (var s in saws) {
-                  if (s == whoSee) {
-                    //kashaona
-                    see = true;
-                  }
-                }
-                if (!see) {
-                  saws.add(whoSee);
-                }
-              }
-              final json = {"seen": saws};
-              FirebaseFirestore.instance
-                  .collection("GroupMessages")
-                  .doc(element["msg_id"])
-                  .update(json)
-                  .whenComplete(() async {
-                print(
-                    "seen updated successfully..............user $saws.......saws message ${element["msg"]}");
-                List localmsgs =
-                    await SecureStorageService().readModalData("grpMessages");
-                for (var msg = 0; msg < localmsgs.length; msg++) {
-                  List sawss = localmsgs[msg][7];
-                  if (localmsgs[msg][0] == element["msg_id"] &&
-                      !sawss.contains(whoSee)) {
-                    //perform changess
-                    sawss.add(whoSee);
-                    localmsgs[msg][7] = saws;
-                    Modal mysms = Modal("grpMessages", localmsgs);
-                    await SecureStorageService().writeModalData(mysms);
-                    // print("changess performed written sucesssssssfull in received");
-                  }
-                }
-              });
-            });
-          });
-        } else {
-          //user message
-
-          FirebaseFirestore.instance
-              .collection("Messages")
-              .where("sender", isEqualTo: userId)
-              .where("receiver", isEqualTo: logged[0])
-              .get()
-              .then((value) {
-            value.docs.forEach((element) {
-              if (element["seen"] == "0") {
-                final json = {"seen": "1"};
-                FirebaseFirestore.instance
-                    .collection("Messages")
-                    .doc(element["msg_id"])
-                    .update(json)
-                    .whenComplete(() async {
-                  // print("seen updated successfully........user direct  .......saws message ${value["msg"]}");
-                  List localmsgss =
-                      await SecureStorageService().readAllMsgData("messages");
-                  for (var msg = 0; msg < localmsgss.length; msg++) {
-                    if (localmsgss[msg][0] == element["msg_id"]) {
-                      localmsgss[msg][5] = "1";
-                      Modal mysmss = Modal("messages", localmsgss);
-                      await SecureStorageService().writeModalData(mysmss);
-                    }
-                  }
-                });
-              }
-            });
-          });
-      
-        }
-
-        print("Mark as read now button is pressed.  update");
+        // print("Mark as read now button is pressed.  update");
       }
     });
+  }
+
+  Future<void> markRead(String userId,lastMsg,time,date) async {
+      List<dynamic> logged =
+        await SecureStorageService().readByKeyData("user");
+    if (isNumeric(userId)) {
+      //group msg
+      //group
+    
+      String whoSee = logged[0];
+    
+      FirebaseFirestore.instance
+          .collection("GroupMessages")
+          .where("grp_id", isEqualTo: userId)
+          .get()
+          .then((value) {
+        value.docs.forEach((element) {
+          List saws = element["seen"];
+          bool see = false;
+          if (saws.isEmpty) {
+            saws.add(whoSee);
+          } else {
+            for (var s in saws) {
+              if (s == whoSee) {
+                //kashaona
+                see = true;
+              }
+            }
+            if (!see) {
+              saws.add(whoSee);
+            }
+          }
+          final json = {"seen": saws};
+          FirebaseFirestore.instance
+              .collection("GroupMessages")
+              .doc(element["msg_id"])
+              .update(json)
+              .whenComplete(()  {
+      
+          });
+        });
+      });
+    } else {
+      //user message
+      UpdateDetails().updateUserDetails(lastMsg, time, date, userId);
+      FirebaseFirestore.instance
+          .collection("Messages")
+          .where("sender", isEqualTo: userId)
+          .where("receiver", isEqualTo: logged[0])
+          .get()
+          .then((value) {
+        value.docs.forEach((element) {
+          if (element["seen"] == "0") {
+            final json = {"seen": "1"};
+            FirebaseFirestore.instance
+                .collection("Messages")
+                .doc(element["msg_id"])
+                .update(json)
+                .whenComplete(() async {
+              // print("seen updated successfully........user direct  .......saws message ${value["msg"]}");
+              List localmsgss =
+                  await SecureStorageService().readAllMsgData("messages");
+              for (var msg = 0; msg < localmsgss.length; msg++) {
+                if (localmsgss[msg][0] == element["msg_id"]) {
+                  localmsgss[msg][5] = "1";
+                  Modal mysmss = Modal("messages", localmsgss);
+                  await SecureStorageService().writeModalData(mysmss);
+                }
+              }
+            });
+          }
+        });
+      });
+          
+    }
   }
 
   Future<void> requestPermision() async {
@@ -290,10 +296,10 @@ class AwesomeNotifyFcm {
       await AwesomeNotifications()
           .requestPermissionToSendNotifications()
           .then((value) {
-        print("permission granted........$value");
+        // print("permission granted........$value");
       });
     } else {
-      print("permission granted........success");
+      // print("permission granted........success");
     }
   }
 

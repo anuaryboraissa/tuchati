@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:tuchati/constants/app_colors.dart';
 import 'package:tuchati/screens/Animation/FadeAnimation.dart';
+import 'package:tuchati/screens/page/progress/progress.dart';
 import 'package:tuchati/screens/page/settings/notification_setting.dart';
 import 'package:tuchati/screens/page/settings/storage_setting.dart';
 import 'package:flutter/cupertino.dart';
@@ -9,14 +10,14 @@ import 'package:flutter/material.dart';
 
 import '../../services/secure_storage.dart';
 
-class Settings extends StatefulWidget {
-  const Settings({super.key});
+class MySettings extends StatefulWidget {
+  const MySettings({super.key});
 
   @override
-  State<Settings> createState() => _SettingsState();
+  State<MySettings> createState() => _MySettingsState();
 }
 
-class _SettingsState extends State<Settings> {
+class _MySettingsState extends State<MySettings> {
   List<dynamic> user = [];
 
   bool lockAppSwitchVal = true;
@@ -30,10 +31,13 @@ class _SettingsState extends State<Settings> {
   );
   TextStyle descStyleIOS = const TextStyle(color: CupertinoColors.inactiveGray);
   initiateUser() async {
-    List logged = await SecureStorageService().readByKeyData("user");
-    setState(() {
-      user = logged;
-    });
+    SecureStorageService().readByKeyData("user").then(
+      (value) {
+        setState(() {
+          user = value;
+        });
+      },
+    );
   }
 
   @override
@@ -41,13 +45,14 @@ class _SettingsState extends State<Settings> {
     initiateUser();
     super.initState();
   }
- bool imeingia=false;
+
+  bool imeingia = false;
   @override
   Widget build(BuildContext context) {
-    if(!imeingia){
+    if (!imeingia) {
       initiateUser();
       setState(() {
-        imeingia=true;
+        imeingia = true;
       });
     }
     return Scaffold(
@@ -88,7 +93,7 @@ class _SettingsState extends State<Settings> {
             child: ListView(
               children: [
                 Padding(
-                   padding: const EdgeInsets.only(left:8.0),
+                  padding: const EdgeInsets.only(left: 8.0),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.start,
                     children: [
@@ -129,18 +134,18 @@ class _SettingsState extends State<Settings> {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.only(left:8.0),
+                  padding: const EdgeInsets.only(left: 8.0),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.start,
                     children: [
-                      Text("Account", style:  AppColors.headingStyle),
+                      Text("Account", style: AppColors.headingStyle),
                     ],
                   ),
                 ),
                 ListTile(
                   leading: const Icon(Icons.phone),
                   title: const Text("Phone Number"),
-                  subtitle: Text(user.isNotEmpty?"${user[3]}":""),
+                  subtitle: Text(user.isNotEmpty ? "${user[3]}" : ""),
                   trailing: const Icon(
                     Icons.arrow_forward_ios_outlined,
                     size: 14,
@@ -150,7 +155,8 @@ class _SettingsState extends State<Settings> {
                 ListTile(
                   leading: const Icon(Icons.mail),
                   title: const Text("UserName"),
-                  subtitle: Text( user.isNotEmpty? "${user[1]} ${user[2]}":""),
+                  subtitle:
+                      Text(user.isNotEmpty ? "${user[1]} ${user[2]}" : ""),
                   trailing: const Icon(
                     Icons.arrow_forward_ios_outlined,
                     size: 14,
@@ -167,11 +173,11 @@ class _SettingsState extends State<Settings> {
                   ),
                 ),
                 Padding(
-                 padding: const EdgeInsets.only(left:8.0),
+                  padding: const EdgeInsets.only(left: 8.0),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.start,
                     children: [
-                      Text("Security", style:  AppColors.headingStyle),
+                      Text("Security", style: AppColors.headingStyle),
                     ],
                   ),
                 ),
@@ -188,11 +194,11 @@ class _SettingsState extends State<Settings> {
                       }),
                 ),
                 Padding(
-                  padding: const EdgeInsets.only(left:8.0),
+                  padding: const EdgeInsets.only(left: 8.0),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.start,
                     children: [
-                      Text("Misc", style:  AppColors.headingStyle),
+                      Text("Misc", style: AppColors.headingStyle),
                     ],
                   ),
                 ),
@@ -205,7 +211,8 @@ class _SettingsState extends State<Settings> {
                   leading: Icon(Icons.file_copy_outlined),
                   title: Text("Open Source and Licences"),
                 ),
-                const ListTile(
+                ListTile(
+                  onTap: displayDialogue,
                   leading: Icon(Icons.help),
                   title: Text("Help"),
                 ),
@@ -215,5 +222,16 @@ class _SettingsState extends State<Settings> {
         ],
       ),
     );
+  }
+
+  displayDialogue() async {
+    initProgressDialogue();
+    await Progresshud.show("logging out.....");
+
+    await Progresshud.dismiss();
+  }
+
+  initProgressDialogue() async {
+    await Progresshud.initializeDialogue(context);
   }
 }

@@ -1,13 +1,16 @@
 import 'dart:io';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_offline/flutter_offline.dart';
+import 'package:intl/intl.dart';
+import 'package:tuchati/main.dart';
 import 'package:tuchati/screens/main_tab_bar/widgets/bottom_icon_widget.dart';
 import 'package:tuchati/screens/page/friends.dart';
-import 'package:tuchati/screens/page/page.dart';
 import 'package:tuchati/screens/page/profile.dart';
 import 'package:tuchati/screens/page/settings.dart';
 import 'package:flutter/material.dart';
 
 import '../../../constants/app_colors.dart';
+import '../../services/secure_storage.dart';
 import '../message_list/message_list.dart';
 
 class MainTabBar extends StatefulWidget {
@@ -22,11 +25,11 @@ class _MainTabBarState extends State<MainTabBar> {
 
   final pages = [
     const MessageListPage(),
-  
     const FriendsPage(),
     const ProfilePage(),
-    const Settings(),
+    const MySettings(),
   ];
+
 
   @override
   Widget build(BuildContext context) {
@@ -44,60 +47,56 @@ class _MainTabBarState extends State<MainTabBar> {
             children: [
               GestureDetector(
                 onTap: () {
-                    setState(() {
-                      pageIndex = 0;
-                    });
+                  setState(() {
+                    pageIndex = 0;
+                  });
                 },
                 child: BottomIconWidget(
                   title: 'Messages',
                   iconName: "assets/icons/ic_message.png",
-                  iconColor: pageIndex == 0 ? AppColors.appColor : AppColors.gray,
-                 
+                  iconColor:
+                      pageIndex == 0 ? AppColors.appColor : AppColors.gray,
                 ),
               ),
-
-        
               GestureDetector(
                 onTap: () {
-                    setState(() {
-                      pageIndex = 1;
-                    });
+                  setState(() {
+                    pageIndex = 1;
+                  });
                 },
                 child: BottomIconWidget(
                   title: 'Friends',
                   iconName: "assets/icons/users.png",
-                  iconColor: pageIndex == 1 ? AppColors.appColor : AppColors.gray,
-            
+                  iconColor:
+                      pageIndex == 1 ? AppColors.appColor : AppColors.gray,
                 ),
               ),
-                    GestureDetector(
+              GestureDetector(
                 onTap: () {
-                     setState(() {
-                      pageIndex = 2;
-                    });
+                  setState(() {
+                    pageIndex = 2;
+                  });
                 },
                 child: BottomIconWidget(
                   title: 'Profile',
                   iconName: "assets/icons/ic_user.png",
-                  iconColor: pageIndex == 2 ? AppColors.appColor : AppColors.gray,
-                
+                  iconColor:
+                      pageIndex == 2 ? AppColors.appColor : AppColors.gray,
                 ),
               ),
-
               GestureDetector(
                 onTap: () {
-                     setState(() {
-                      pageIndex = 3;
-                    });
+                  setState(() {
+                    pageIndex = 3;
+                  });
                 },
                 child: BottomIconWidget(
                   title: 'Settings',
                   iconName: "assets/icons/ic_settings.png",
-                  iconColor: pageIndex == 3 ? AppColors.appColor : AppColors.gray,
-                 
+                  iconColor:
+                      pageIndex == 3 ? AppColors.appColor : AppColors.gray,
                 ),
               ),
-
             ],
           ),
         ),

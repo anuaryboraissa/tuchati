@@ -15,8 +15,8 @@ class StatusBarWidget extends StatelessWidget {
     required this.activeIndex,
   }) : super(key: key);
   final Function(int) callback;
-  final String totalSms;
-  final String totalGrpSms;
+  final Widget totalSms;
+  final Widget totalGrpSms;
   final RxInt activeIndex;
   @override
   Widget build(BuildContext context) {
@@ -44,7 +44,7 @@ class StatusBarWidget extends StatelessWidget {
                     callback(activeIndex.value);
                   },
                   child: StatusBarItemWidget(
-                    title: totalSms == "0" ? 'Chats ' : 'Chats $totalSms',
+                    title: totalSms,
                     decoration: BoxDecoration(
                       boxShadow: [
                         if (activeIndex.value == 1)
@@ -74,7 +74,7 @@ class StatusBarWidget extends StatelessWidget {
                   },
                   child: StatusBarItemWidget(
                     title:
-                        totalGrpSms == "0" ? 'Groups ' : 'Groups $totalGrpSms',
+                        totalGrpSms ,
                     decoration: BoxDecoration(
                       boxShadow: [
                         if (activeIndex.value == 2)
@@ -113,7 +113,7 @@ class StatusBarItemWidget extends StatelessWidget {
     required this.titleColor,
   });
 
-  final String title;
+  final Widget title;
 
   final Color titleColor;
 
@@ -132,17 +132,7 @@ class StatusBarItemWidget extends StatelessWidget {
         child: Row(
           children: [
             const Spacer(),
-            Text(
-              title,
-              // style: SafeGoogleFont(
-              //   'SF Pro Text',
-              //   fontSize: 15,
-              //   fontWeight: FontWeight.w700,
-              //   height: 1.2575,
-              //   letterSpacing: 1,
-              //   color: titleColor,
-              // ),
-            ),
+            title,
             const CustomWidthSpacer(
               size: 0.03,
             ),

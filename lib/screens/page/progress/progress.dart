@@ -1,27 +1,22 @@
 import 'package:flutter/material.dart';
-import 'package:progress_dialog/progress_dialog.dart';
+// import 'package:progress_dialog/progress_dialog.dart';
+import 'package:simple_fontellico_progress_dialog/simple_fontico_loading.dart';
 
 class Progresshud {
-  static late ProgressDialog dialog;
+  static late SimpleFontelicoProgressDialog _dialog;
 
-  static Future<void> initializeDialogue(context) async {
-    dialog =ProgressDialog(context,type: ProgressDialogType.Normal);
+  static initializeDialogue(context) {
+    _dialog=SimpleFontelicoProgressDialog(context: context);
+    // print("dialogue initialized...............");
   }
 
   static Future<void> show(String message) async {
-    dialog.show();
-  }
- static Future<void> updateMessage(String message) async {
-  if(await isShowing()){
-     dialog.update(message: message);
-  }
-  }
-  static Future<bool> isShowing() async {
-    return dialog.isShowing();
+    _dialog.show(message: message, type: SimpleFontelicoProgressDialogType.threelines);
   }
 
+
    static Future<void> dismiss() async {
-          dialog.hide();
+       _dialog.hide();
   }
   static Future<void> mySnackBar(context,String message)async{
     ScaffoldMessenger.of(context).showSnackBar(

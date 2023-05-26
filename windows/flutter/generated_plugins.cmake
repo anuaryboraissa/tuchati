@@ -3,8 +3,10 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  connectivity_plus_windows
   emoji_picker_flutter
   flutter_secure_storage_windows
+  network_info_plus_windows
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

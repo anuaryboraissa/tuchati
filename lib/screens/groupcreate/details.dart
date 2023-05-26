@@ -2,18 +2,20 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:hive/hive.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:tuchati/constants/app_colors.dart';
 import 'package:tuchati/screens/Animation/FadeAnimation.dart';
 import 'package:tuchati/screens/chat_room/chat_room.dart';
 import 'package:tuchati/services/firebase.dart';
 import 'package:tuchati/services/groups.dart';
 import 'package:tuchati/services/secure_storage.dart';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:hive/hive.dart';
-import 'package:image_picker/image_picker.dart';
+
+import '../../services/SQLite/modelHelpers/grpDetailsHelper.dart';
+import '../../services/SQLite/models/grpDetails.dart';
 
 class GroupDetails extends StatefulWidget {
   const GroupDetails({
@@ -50,15 +52,7 @@ class _GroupDetailsState extends State<GroupDetails> {
   }
 
 //timer
-  Timer? timer;
-  loadGroupDetails() {
-    timer = Timer(const Duration(seconds: 10), () async {
-      await GroupService().filterMyGroups();
-      await FirebaseService().groupMsgsDetails();
-    });
-  }
 
- 
 
   late Box<Uint8List> groupsIcon;
   @override
@@ -141,7 +135,7 @@ class _GroupDetailsState extends State<GroupDetails> {
                     color: Colors.white,
                     child: IconButton(
                       onPressed: () async {
-                        print("take picture...........");
+                        // print("take picture...........");
                         await getGroupIcon();
                       },
                       icon: Icon(
@@ -306,8 +300,9 @@ class _GroupDetailsState extends State<GroupDetails> {
     if (!participants.contains(logged[0])) {
       participants.add(logged[0]);
     }
+
     bool result = await GroupService().createGroup(
-        groupId, groupNamee, groupDesc, participants, admins, icon);
+        groupId, groupNamee, groupDesc, participants, admins, icon,logged[0]);
     if (result) {
       setState(() {
         groupName.text = "";
@@ -326,21 +321,35 @@ class _GroupDetailsState extends State<GroupDetails> {
       setState(() {
         attempt = false;
       });
-   
-      Navigator.of(context)
-          .push(MaterialPageRoute(
-        builder: (context) =>
-            ChatRoomPage(user: loggedGroup, name: groupNamee, iam: logged[0]),
-      ))
-          .then((value) {
-        print("loading details group now................");
-        loadGroupDetails();
-        print("loading details group now completeted................");
-      });
-         loadGroupDetails();
-      print("group successfully created..........");
+      GroupMsgDetails detail = GroupMsgDetails(
+          name: groupNamee,
+          grpId: int.parse(groupId),
+          lastMessage: "",
+          date: "",
+          lastSender: "",
+          unSeen: 0);
+      int det = await GroupSmsDetailsHelper().insert(detail);
+      if (det > 0) {
+        Navigator.of(context)
+            .push(MaterialPageRoute(
+          builder: (context) => ChatRoomPage(
+            group: detail,
+            name: groupNamee,
+            iam: logged[0],
+            fromDetails: true,
+          ),
+        ))
+            .then((value) {
+          // print("loading details group now................");
+          // loadGroupDetails();
+          // print("loading details group now completeted................");
+        });
+      }
+
+      //  loadGroupDetails();
+      // print("group successfully created..........");
     } else {
-      print("something went wrong.....");
+      // print("something went wrong.....");
     }
 
     //call timer

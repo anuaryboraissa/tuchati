@@ -1,23 +1,38 @@
 // ignore_for_file: public_member_api_docs, sort_constructors_first
 import 'dart:async';
 
-import 'package:awesome_notifications/awesome_notifications.dart';
-import 'package:tuchati/constants/app_colors.dart';
-import 'package:tuchati/screens/chat_room/chat_room.dart';
-import 'package:tuchati/screens/message_list/widgets/header.dart';
-import 'package:tuchati/screens/message_list/widgets/status_bar.dart';
-import 'package:tuchati/services/firebase.dart';
-import 'package:tuchati/services/recording.dart';
-import 'package:tuchati/services/secure_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_offline/flutter_offline.dart';
 import 'package:get/get_rx/src/rx_types/rx_types.dart';
 import 'package:get/get_state_manager/src/rx_flutter/rx_obx_widget.dart';
 import 'package:hive/hive.dart';
+import 'package:intl/intl.dart';
+import 'package:tuchati/constants/app_colors.dart';
+import 'package:tuchati/screens/chat_room/chat_room.dart';
+import 'package:tuchati/screens/message_list/widgets/header.dart';
+import 'package:tuchati/screens/message_list/widgets/status_bar.dart';
+import 'package:tuchati/screens/page/dialogue/dialogueBoxes.dart';
+import 'package:tuchati/services/SQLite/groups/admins/adminHelper.dart';
+import 'package:tuchati/services/SQLite/groups/group.dart';
+import 'package:tuchati/services/SQLite/groups/groupHelper.dart';
+import 'package:tuchati/services/SQLite/models/grpDetails.dart';
+import 'package:tuchati/services/firebase.dart';
+import 'package:tuchati/services/secure_storage.dart';
 
 import '../../../device_utils.dart';
+import '../../main.dart';
+import '../../services/SQLite/databaseHelper/grpSmsdetails.dart';
+import '../../services/SQLite/databaseHelper/logout.dart';
+import '../../services/SQLite/groups/participants/participantHelper.dart';
+import '../../services/SQLite/modelHelpers/directsmsdetails.dart';
+import '../../services/SQLite/modelHelpers/grpDetailsHelper.dart';
+import '../../services/SQLite/modelHelpers/grpMsgsHelper.dart';
+import '../../services/SQLite/modelHelpers/userHelper.dart';
+import '../../services/SQLite/models/msgDetails.dart';
+import '../page/progress/progress.dart';
 import 'messages_view/message_view.dart';
 
 class MessageListPage extends StatefulWidget {
@@ -30,17 +45,6 @@ class MessageListPage extends StatefulWidget {
 }
 
 class _MessageListPageState extends State<MessageListPage> {
-  //notification
-
-//refreshPage
-  loadNewDataCallBack() {
-    setState(() {
-      data = SecureStorageService().readUsersSentToMe("usersToMe");
-      mygroups = SecureStorageService().readUsersSentToMe("grpSmsDetails");
-    });
-  }
-
-//end refreshed
   RxInt activeIndex = 1.obs;
   late Timer timer;
   List userMsgs = [];
@@ -50,12 +54,8 @@ class _MessageListPageState extends State<MessageListPage> {
 
   Future<List>? data;
   Future<List>? mygroups;
-
   String senderr = '';
   findWhoIam() async {
-    // await SoundRecorder().init();
-    // List<dynamic> logged = await SecureStorageService().readByKeyData("user");
-    totalSms = await SecureStorageService().readSecureData("totalSms");
     SecureStorageService().readByKeyData("user").then(
       (value) {
         setState(() {
@@ -64,6 +64,78 @@ class _MessageListPageState extends State<MessageListPage> {
         });
       },
     );
+  }
+
+  deleteGroup(String id) async {
+    GroupMsgDetails? group = await GroupSmsDetailsHelper().queryById(id);
+    if (group != null) {
+      int d = await GroupSmsDetailsHelper().delete(group.grpId);
+      if (d > 0) {
+        print("next level..______");
+        GroupModel? grp = await GroupHelper().queryById(group.grpId);
+        if (grp != null) {
+          int d2 = await GroupHelper().delete(grp.grpId);
+          if (d2 > 0) {
+            print("next level. two.______");
+            Box<Uint8List> grpIcon = Hive.box<Uint8List>("groups");
+            grpIcon.delete(grp.grpId.toString());
+            DocumentReference ref =
+                FirebaseFirestore.instance.collection("Groups").doc(id);
+            ref.get().then((value) {
+              List participants = value["participants"];
+              List admins = value["admins"];
+              if (participants.contains(senderr)) {
+                participants.remove(senderr);
+                if (admins.contains(senderr)) {
+                  admins.remove(senderr);
+                }
+                final json = {"participants": participants, "admins": admins};
+                ref.update(json).whenComplete(() async {
+                  _dataOfferGroup();
+                  queryTotalChats();
+                  await Progresshud.mySnackBar(
+                      context, "Successfully delete the group");
+                });
+              }
+            });
+          }
+        }
+      }
+    }
+  }
+
+  popupDialogue(String message, String groupId, GroupMsgDetails? group) async {
+    await DialogueBox.showInOutDailog(
+        context: context,
+        yourWidget: Text(message),
+        secondButton: ElevatedButton(
+            style:
+                ElevatedButton.styleFrom(backgroundColor: AppColors.appColor),
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (context) => ChatRoomPage(
+                  group: group,
+                  name: group!.name,
+                  iam: senderr,
+                  fromDetails: false,
+                ),
+              ));
+            },
+            child: const Text("no")),
+        firstButton: ElevatedButton(
+            style:
+                ElevatedButton.styleFrom(backgroundColor: AppColors.appColor),
+            onPressed: () {
+              deleteGroup(groupId);
+              Navigator.pop(context);
+            },
+            child: const Text("yes")));
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   late Box<Uint8List> groupsIcon;
@@ -81,44 +153,30 @@ class _MessageListPageState extends State<MessageListPage> {
     });
   }
 
-  deleteData() async {
-    // await SecureStorageService().deleteByKeySecureData("groups");
-    // await SecureStorageService().deleteByKeySecureData("grpMessages");
-    // await SecureStorageService().deleteByKeySecureData("groupMembers");
-    //  await SecureStorageService().deleteByKeySecureData("groupAdmins");
-    await SecureStorageService().deleteByKeySecureData("grpSmsDetails");
+  int counter = 0;
+  bool? start;
+  Stream<List<DirMsgDetails?>> _userDetails() async* {
+    yield* Stream.fromFuture(DirectSmsDetailsHelper().queryAll());
   }
 
-  Stream<List> _dataOfferUsers() async* {
-    data = SecureStorageService().readUsersSentToMe("usersToMe");
-    // mygroups = SecureStorageService().readUsersSentToMe("grpSmsDetails");
-    yield* Stream.fromFuture(data!);
-  }
-
-  Stream<List> _dataOfferGroup() async* {
-    mygroups = SecureStorageService().readUsersSentToMe("grpSmsDetails");
-    yield* Stream.fromFuture(mygroups!);
+  Stream<List<GroupMsgDetails?>> _dataOfferGroup() async* {
+    yield* Stream.fromFuture(GroupSmsDetailsHelper().queryAll());
   }
 
   late Box<String> simples;
   @override
   void initState() {
-    // deleteData();
     simples = Hive.box<String>("simples");
-
     groupsIcon = Hive.box<Uint8List>("groups");
-
     getDefaultImage();
     findWhoIam();
-
+    // checkGroupChats();
     super.initState();
   }
 
   void updateSeen(sender) async {
     List<dynamic> logged = await SecureStorageService().readByKeyData("user");
     String receiver = logged[0];
-    print(
-        "waiting while update seen............. sender $sender. receiver $receiver");
 
     FirebaseFirestore.instance
         .collection("Messages")
@@ -127,8 +185,6 @@ class _MessageListPageState extends State<MessageListPage> {
         .get()
         .then((msg) {
       msg.docs.forEach((element) async {
-        print(
-            "message ${element["msg"]}................going to be updateddddd");
         if (element["seen"] == "0") {
           final json = {"msg_id": element["msg_id"], "seen": "1"};
           await FirebaseService().updateMsgs(json);
@@ -137,24 +193,33 @@ class _MessageListPageState extends State<MessageListPage> {
     });
   }
 
+  queryTotalChats() {
+    DirectSmsDetailsHelper().queryChats().then((value) {
+      setState(() {
+        totalUserChats = value.length;
+      });
+    });
+    GroupSmsDetailsHelper().queryChats().then((value) {
+      setState(() {
+        totalGrpChats = value.length;
+      });
+    });
+  }
+
   int imepita = 0;
   int totalUserChats = 0;
   int totalGrpChats = 0;
-  int imeingia = 0;
-  int imeingia2 = 0;
+  late Box<List<String>> grpLetfs;
   final TextEditingController searched = TextEditingController();
   @override
   Widget build(BuildContext context) {
-    setState(() {
-      if (imepita < 2) {
-        data = SecureStorageService().readUsersSentToMe("usersToMe");
-        mygroups = SecureStorageService().readUsersSentToMe("grpSmsDetails");
-
+    if (imepita < 2) {
+      queryTotalChats();
+      grpLetfs = Hive.box<List<String>>("lefts");
+      setState(() {
         imepita = imepita + 1;
-        // loadSms();
-      }
-      //
-    });
+      });
+    }
     return Scaffold(
         body: Container(
           height: DeviceUtils.getScaledHeight(context, 1),
@@ -167,23 +232,24 @@ class _MessageListPageState extends State<MessageListPage> {
             children: [
               //header
               HeaderWithSearchBar(
+                starting: start,
                 seching: () async {
                   showSearch(
                     context: context,
                     // delegate to customize the search bar
                     delegate: CustomSearchDelegate(
-                        items: activeIndex.value == 1 ? data : mygroups,
-                        activeIndex: activeIndex,
+                        itemsGroup: activeIndex.value == 2
+                            ? GroupSmsDetailsHelper().queryAll()
+                            : null,
+                        itemsUser: activeIndex.value == 1
+                            ? DirectSmsDetailsHelper().queryAll()
+                            : null,
                         iam: sender),
                   );
                 },
                 activeIndexx: activeIndex,
                 refreshed: () async {
-                  await FirebaseService().receiveGroupsMsgAndSaveLocal();
-                  await FirebaseService().groupMsgsDetails();
-                  print("refreshing contentsssssssssssss...................");
-                  Navigator.pop(context);
-                  loadNewDataCallBack();
+                  // refreshContext();
                 },
                 controller: searched,
               ),
@@ -195,82 +261,86 @@ class _MessageListPageState extends State<MessageListPage> {
                   callback: (index) {
                     activeIndex.value = index;
                   },
-                  totalSms: totalUserChats == 0 ? '0' : "$totalUserChats",
-                  totalGrpSms: simples.get("grpMessags") == null ? '0' : "${simples.get("grpMessags")}",
+                  totalSms: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text("Chats"),
+                      const SizedBox(
+                        width: 50,
+                      ),
+                      totalUserChats == 0
+                          ? const Text("")
+                          : CircleAvatar(
+                              backgroundColor: AppColors.appColor,
+                              child: Text(
+                                  totalUserChats == 0 ? '0' : "$totalUserChats",
+                                  style: const TextStyle(color: Colors.white)))
+                    ],
+                  ),
+                  totalGrpSms: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text("Groups"),
+                      const SizedBox(
+                        width: 50,
+                      ),
+                      totalGrpChats == 0
+                          ? const Text("")
+                          : CircleAvatar(
+                              backgroundColor: AppColors.appColor,
+                              child: Text(
+                                totalGrpChats.toString(),
+                                style: const TextStyle(color: Colors.white),
+                              ))
+                    ],
+                  ),
                   activeIndex: activeIndex,
                 ),
               ),
               Expanded(
                 child: Obx(() => activeIndex.value == 1
                     ? StreamBuilder(
-                        stream: _dataOfferUsers(),
+                        stream: _userDetails(),
                         builder: (context, snapshot) {
                           if (snapshot.hasData) {
                             return ListView.builder(
                               itemCount: snapshot.data!.length,
                               itemBuilder: (context, index) {
-                                if (snapshot.data![index].length < 9) {
-                                  return Container();
-                                }
-                                if (imeingia<2) {
-                                  WidgetsBinding.instance.addPostFrameCallback(
-                                    (timeStamp) {
-                                      setState(() {
-                                        totalUserChats =
-                                            snapshot.data![index][10];
-                                               print("setted.......... total user chats $totalUserChats");
-                                        imeingia = imeingia+1;
-                                      });
-                                    },
-                                  );
-                                }
-
+                                // if (snapshot.data![index].length < 9) {
+                                //   return Container();
+                                // }
+                                DirMsgDetails detail = snapshot
+                                    .data![snapshot.data!.length - index - 1]!;
                                 return GestureDetector(
                                   onTap: () {
-                                    print(
-                                        "huyu sender name ${snapshot.data![snapshot.data!.length - index - 1][0]} i yake......${snapshot.data![snapshot.data!.length - index - 1][0]}");
-                                    updateSeen(snapshot.data![
-                                        snapshot.data!.length - index - 1][0]);
+                                    // print(
+                                    //     "huyu sender name ${snapshot.data![snapshot.data!.length - index - 1][0]} i yake......${snapshot.data![snapshot.data!.length - index - 1][0]}");
+                                    // updateSeen(detail.);
                                     Navigator.of(context)
                                         .push(MaterialPageRoute(
                                       builder: (context) => ChatRoomPage(
                                         user: snapshot.data![
-                                            snapshot.data!.length - index - 1],
+                                            snapshot.data!.length - index - 1]!,
                                         name: "",
                                         iam: senderr,
+                                        fromDetails: false,
                                       ),
                                     ))
                                         .then((value) {
                                       setState(() {
-                                        loadNewDataCallBack();
-                                        print(
-                                            "state called successfully............................................");
+                                        _userDetails();
+                                        queryTotalChats();
                                       });
                                     });
                                   },
                                   child: ChatUserListCardWidget(
-                                    name:
-                                        "${snapshot.data![snapshot.data!.length - index - 1][1]} ${snapshot.data![snapshot.data!.length - index - 1][2]}",
-                                    isOnline: true,
-                                    message: snapshot.data![
-                                            snapshot.data!.length - index - 1]
-                                            [7]
-                                        .toString(),
-                                    unReadCount: snapshot.data![
-                                            snapshot.data!.length - index - 1]
-                                            [6]
-                                        .toString(),
-                                    isUnReadCountShow: snapshot.data![
-                                                snapshot.data!.length -
-                                                    index -
-                                                    1][6] ==
-                                            0
-                                        ? false
-                                        : true,
-                                    time: snapshot.data![
-                                        snapshot.data!.length - index - 1][8],
-                                    user: snapshot.data![
-                                        snapshot.data!.length - index - 1],
+                                    name: detail.name,
+                                    message: detail.lastMessage.toString(),
+                                    unReadCount: detail.unSeen.toString(),
+                                    isUnReadCountShow:
+                                        detail.unSeen == 0 ? false : true,
+                                    time: detail.date,
+                                    user: detail,
                                   ),
                                 );
                               },
@@ -283,9 +353,13 @@ class _MessageListPageState extends State<MessageListPage> {
                                 "connection is active can be done any time");
                           } else if (snapshot.connectionState ==
                               ConnectionState.waiting) {
-                            return const Center(
-                                child:
-                                    Text("waiting for connection............"));
+                            return Center(
+                                child: Center(
+                              child: CircularProgressIndicator(
+                                color: AppColors.appColor,
+                                strokeWidth: 3,
+                              ),
+                            ));
                           } else {
                             return Center(
                               child: CircularProgressIndicator(
@@ -302,49 +376,53 @@ class _MessageListPageState extends State<MessageListPage> {
                             return ListView.builder(
                               itemCount: snapshot.data!.length,
                               itemBuilder: (context, index) {
-                               
+                                GroupMsgDetails? group = snapshot
+                                    .data![snapshot.data!.length - index - 1];
+
                                 return GestureDetector(
+                                  onLongPress: () {
+                                    // removeGroup(snapshot.data![
+                                    //     snapshot.data!.length - index - 1][1]);
+                                  },
                                   onTap: () {
                                     // updateSeen(snapshot.data![
                                     //     snapshot.data!.length - index - 1][0]);
-                                    Navigator.of(context)
-                                        .push(MaterialPageRoute(
-                                      builder: (context) => ChatRoomPage(
-                                        user: snapshot.data![
-                                            snapshot.data!.length - index - 1],
-                                        name: "",
-                                        iam: senderr,
-                                      ),
-                                    ))
-                                        .then((value) {
-                                      setState(() {
-                                        loadNewDataCallBack();
-                                        print(
-                                            "state called successfully............................................");
+
+                                    if (grpLetfs.get(senderr) != null &&
+                                        grpLetfs
+                                            .get(senderr)!
+                                            .contains(group.grpId.toString())) {
+                                      //already lefts
+                                      popupDialogue(
+                                          "You have already lefts this group ${group.name} \n Are yo want do delete it ?",
+                                          group.grpId.toString(),
+                                          group);
+                                    } else {
+                                      Navigator.of(context)
+                                          .push(MaterialPageRoute(
+                                        builder: (context) => ChatRoomPage(
+                                          group: group,
+                                          name: group.name,
+                                          iam: senderr,
+                                          fromDetails: false,
+                                        ),
+                                      ))
+                                          .then((value) {
+                                        setState(() {
+                                          _dataOfferGroup();
+                                          queryTotalChats();
+                                        });
                                       });
-                                    });
+                                    }
                                   },
                                   child: ChatUserListCardWidget(
-                                    name: snapshot.data![
-                                        snapshot.data!.length - index - 1][1],
-                                    isOnline: true,
-                                    message:
-                                        "${snapshot.data![snapshot.data!.length - index - 1][3]}",
-                                    unReadCount:
-                                        "${snapshot.data![snapshot.data!.length - index - 1][2]}",
-                                    isUnReadCountShow: snapshot.data![
-                                                snapshot.data!.length -
-                                                    index -
-                                                    1][2] ==
-                                            0
-                                        ? false
-                                        : true,
-                                    time: snapshot.data![snapshot.data!.length -
-                                            index -
-                                            1][4]
-                                        .toString(),
-                                    user: snapshot.data![
-                                        snapshot.data!.length - index - 1],
+                                    name: group!.name,
+                                    message: group.lastMessage,
+                                    unReadCount: group.unSeen.toString(),
+                                    isUnReadCountShow:
+                                        group.unSeen == 0 ? false : true,
+                                    time: group.date.toString(),
+                                    group: group,
                                   ),
                                 );
                               },
@@ -357,9 +435,13 @@ class _MessageListPageState extends State<MessageListPage> {
                                 "connection is active can be done any time");
                           } else if (snapshot.connectionState ==
                               ConnectionState.waiting) {
-                            return const Center(
-                                child:
-                                    Text("waiting for connection............"));
+                            return Center(
+                                child: Center(
+                              child: CircularProgressIndicator(
+                                color: AppColors.appColor,
+                                strokeWidth: 3,
+                              ),
+                            ));
                           } else {
                             return Center(
                               child: CircularProgressIndicator(
@@ -389,23 +471,39 @@ class _MessageListPageState extends State<MessageListPage> {
               )
             : const SizedBox()));
   }
+
+  removeGroup(String groupName) async {
+    await DialogueBox.showInOutDailog(
+        context: context,
+        yourWidget: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Text("Do you want to delete $groupName"),
+        ),
+        firstButton: ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+            },
+            child: const Text("yes")),
+        secondButton: ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+            },
+            child: const Text("no")));
+  }
 }
 
 //searching
 class CustomSearchDelegate extends SearchDelegate {
   // Demo list to show querying
-  Future<List>? items;
-  RxInt activeIndex;
+  Future<List<DirMsgDetails?>>? itemsUser;
+  Future<List<GroupMsgDetails?>>? itemsGroup;
   String iam;
-  CustomSearchDelegate({
-    required this.items,
-    required this.activeIndex,
-    required this.iam,
-  });
-  List? newItems = [];
+  CustomSearchDelegate({required this.iam, this.itemsGroup, this.itemsUser});
+  List<DirMsgDetails?>? newItemsUser = [];
+  List<GroupMsgDetails?>? newItemsGroup = [];
   assignItems() async {
-    newItems = await items;
-    print("items assigned...$newItems");
+    newItemsUser = await itemsUser;
+    newItemsGroup = await itemsGroup;
   }
 
   // first overwrite to
@@ -417,11 +515,11 @@ class CustomSearchDelegate extends SearchDelegate {
     return [
       IconButton(
         onPressed: () async {
-          List? items2 = await items;
-          items2 ??= [];
-          for (var x in items2) {
-            print("imefikaa...............sssssssssssssssssssssss....${x[0]}");
-          }
+          // List? items2 = await items;
+          // items2 ??= [];
+          // for (var x in items2) {
+          //   // print("imefikaa...............sssssssssssssssssssssss....${x[0]}");
+          // }
 
           query = '';
         },
@@ -448,36 +546,41 @@ class CustomSearchDelegate extends SearchDelegate {
     List<String> ids = [];
     Box<Uint8List> mygroups = Hive.box<Uint8List>("groups");
     List items3 = [];
-
-    for (var fruit in newItems!) {
-      print("my id fruit ${fruit[0]}");
-      if (fruit[1].toLowerCase().contains(query.toLowerCase())) {
-        matchQuery.add(fruit[1]);
-        ids.add(fruit[0]);
-        items3.add(fruit);
-      }
-    }
+    print(itemsGroup == null
+        ? "total group search ${newItemsGroup!.length}"
+        : "total user search ${newItemsUser!.length}.......");
     return ListView.builder(
-      itemCount: matchQuery.length,
+      itemCount: itemsGroup != null
+          ? query.isEmpty
+              ? newItemsGroup!.length
+              : newItemsGroup!
+                  .where((element) =>
+                      element!.name.toLowerCase().contains(query.toLowerCase()))
+                  .toList()
+                  .length
+          : query.isEmpty
+              ? newItemsUser!.length
+              : newItemsUser!
+                  .where((element) =>
+                      element!.name.toLowerCase().contains(query.toLowerCase()))
+                  .toList()
+                  .length,
       itemBuilder: (context, index) {
         var result = matchQuery[index];
-        print("my is.............................${ids[index]}");
+        print("my is indexesss.............................$index");
         return ListTile(
-          onTap: () {
-            // Navigator.push(
-            //     context,
-            //     MaterialPageRoute(
-            //         builder: (_) => BlogScreen(
-            //               blog: blogggs[index],
-            //               backgrnd: log_page,
-            //               b_white: log_text,
-            //             )));
-          },
-          leading: CircleAvatar(
-            backgroundImage: MemoryImage(mygroups.get(ids[index])!),
-            // backgroundColor: Colors.blue,
-          ),
-          title: Text(result),
+          onTap: () {},
+          title: Text(itemsGroup == null
+              ? newItemsUser!
+                  .where((element) =>
+                      element!.name.toLowerCase().contains(query.toLowerCase()))
+                  .toList()[index]!
+                  .name
+              : newItemsGroup!
+                  .where((element) =>
+                      element!.name.toLowerCase().contains(query.toLowerCase()))
+                  .toList()[index]!
+                  .name),
           trailing: Icon(
             Icons.arrow_forward_ios_rounded,
             size: 18,
@@ -491,49 +594,67 @@ class CustomSearchDelegate extends SearchDelegate {
   // querying process at the runtime
   @override
   Widget buildSuggestions(BuildContext context) {
-    List<String> ids = [];
-    Box<Uint8List> mygroups = Hive.box<Uint8List>("groups");
-    List<String> matchQuery2 = [];
-    List<String> matchQuery2msgs = [];
-    List items = [];
-    for (var fruit in newItems!) {
-      print("my id fruit ${fruit[0]}");
-      if (fruit[1].toLowerCase().contains(query.toLowerCase())) {
-        matchQuery2.add(fruit[1]);
-        matchQuery2msgs.add(fruit[3]);
-        items.add(fruit);
-        ids.add(fruit[0]);
-      }
-    }
     return ListView.builder(
-      itemCount: matchQuery2.length,
+      itemCount: itemsGroup != null
+          ? newItemsGroup!
+              .where((element) =>
+                  element!.name.toLowerCase().contains(query.toLowerCase()))
+              .toList()
+              .length
+          : newItemsUser!
+              .where((element) =>
+                  element!.name.toLowerCase().contains(query.toLowerCase()))
+              .toList()
+              .length,
       itemBuilder: (context, index) {
-        print("my is.............................${ids[index]}");
-        var result = matchQuery2[index];
-
+        // var result = matchQuery[index];
         return ListTile(
           onTap: () {
             Navigator.of(context).push(MaterialPageRoute(
               builder: (context) => ChatRoomPage(
-                user: items[index],
+                user: itemsGroup == null
+                    ? newItemsUser!
+                        .where((element) => element!.name
+                            .toLowerCase()
+                            .contains(query.toLowerCase()))
+                        .toList()[index]
+                    : null,
+                group: itemsGroup != null
+                    ? newItemsGroup!
+                        .where((element) => element!.name
+                            .toLowerCase()
+                            .contains(query.toLowerCase()))
+                        .toList()[index]
+                    : null,
                 name: "",
                 iam: iam,
+                fromDetails: false,
               ),
             ));
           },
-          leading: CircleAvatar(
-            backgroundImage: activeIndex.value == 1
-                ? mygroups.get(ids[index]) == null
-                    ? MemoryImage(mygroups.get("userDefault")!)
-                    : MemoryImage(mygroups.get(ids[index])!)
-                : mygroups.get(ids[index]) == null
-                    ? MemoryImage(mygroups.get("groupDefault")!)
-                    : MemoryImage(mygroups.get(ids[index])!),
-            // backgroundColor: Colors.blue,
-          ),
-          title: Text(result),
-          subtitle: Text(matchQuery2msgs[index]),
-          trailing: const Icon(
+          title: Text(itemsGroup == null
+              ? newItemsUser!
+                  .where((element) =>
+                      element!.name.toLowerCase().contains(query.toLowerCase()))
+                  .toList()[index]!
+                  .name
+              : newItemsGroup!
+                  .where((element) =>
+                      element!.name.toLowerCase().contains(query.toLowerCase()))
+                  .toList()[index]!
+                  .name),
+          subtitle: Text(itemsGroup == null
+              ? newItemsUser!
+                  .where((element) =>
+                      element!.name.toLowerCase().contains(query.toLowerCase()))
+                  .toList()[index]!
+                  .lastMessage
+              : newItemsGroup!
+                  .where((element) =>
+                      element!.name.toLowerCase().contains(query.toLowerCase()))
+                  .toList()[index]!
+                  .lastMessage),
+          trailing: Icon(
             Icons.arrow_forward_ios_rounded,
             size: 18,
           ),

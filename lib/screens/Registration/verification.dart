@@ -203,13 +203,13 @@ class _PhoneVerificationState extends State<PhoneVerification> {
                                 blurRadius: 10)
                           ],
                           onCompleted: (value) {
-                            print("completed");
+                            // print("completed");
                           },
                           beforeTextPaste: (text) {
                             return true;
                           },
                           onChanged: (String value) {
-                            print(value);
+                            // print(value);
                             setState(() {
                               currentText = value;
                             });

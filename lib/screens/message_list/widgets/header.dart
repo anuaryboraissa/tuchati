@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import 'package:tuchati/screens/groupcreate/addmembers.dart';
+import 'package:tuchati/screens/page/ml_data.dart';
 import 'package:tuchati/utils.dart';
 import 'package:tuchati/widgets/spacer/spacer_custom.dart';
 
@@ -14,11 +15,13 @@ class HeaderWithSearchBar extends StatelessWidget {
     Key? key,
     required this.activeIndexx,
     required this.refreshed,
+    this.starting,
     this.seching,
     required this.controller,
   }) : super(key: key);
   final RxInt activeIndexx;
   final Function()? refreshed;
+  final bool? starting;
   final Function()? seching;
   final TextEditingController controller;
   @override
@@ -27,6 +30,7 @@ class HeaderWithSearchBar extends StatelessWidget {
     List menuitems = [
     
       ListTile(
+         trailing: starting!=null && starting! ? const CircularProgressIndicator():const Text(""),
          title:  const Text("refresh"),
          onTap: refreshed
       ),
@@ -57,10 +61,12 @@ class HeaderWithSearchBar extends StatelessWidget {
             
             :    ListTile(
                   onTap: () {
-                  //       Navigator.of(context).push(MaterialPageRoute(
-                  //   builder: (context) => const Addparticipant(),
-                  // ));
-                  //   Navigator.pop(context);
+                    print("move.....");
+                         Navigator.pop(context);
+                        Navigator.of(context).push(MaterialPageRoute(
+                    builder: (context) =>const MachineLearning(),
+                  ));
+               
                  
                   },
                   title: Text(
@@ -97,7 +103,7 @@ class HeaderWithSearchBar extends StatelessWidget {
             icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
             position: PopupMenuPosition.under,
             onSelected: (value) {
-              print(value);
+              // print(value);
             },
             itemBuilder: (context) => menuitems
                 .map((e) => PopupMenuItem(value: e, child: e))

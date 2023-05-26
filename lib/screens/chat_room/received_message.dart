@@ -4,21 +4,25 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
 import 'package:hive/hive.dart';
-
 import 'package:tuchati/screens/chat_room/widgets/chat_bubble.dart';
+import 'package:tuchati/services/SQLite/modelHelpers/userHelper.dart';
+import 'package:tuchati/services/SQLite/models/user.dart';
 
 import '../../../constants/app_colors.dart';
 import '../../../device_utils.dart';
 import '../../../widgets/spacer/spacer_custom.dart';
+import '../../services/SQLite/modelHelpers/dirMsgsHelper.dart';
+import '../../services/SQLite/models/dirMessages.dart';
 import '../../services/secure_storage.dart';
-import '../../utils.dart';
+import '../recording/src/widgets/audio_bubble.dart';
 
-class ReceivedMessage extends StatelessWidget {
+class ReceivedMessage extends StatefulWidget {
   final Widget child;
   final Widget? replied;
   final List? participants;
   final int userNow;
   String? sender;
+  final String? whoIam;
   final bool replied_status;
   final String time;
   final String messag;
@@ -33,6 +37,7 @@ class ReceivedMessage extends StatelessWidget {
     this.participants,
     required this.userNow,
     this.sender,
+    this.whoIam,
     required this.replied_status,
     required this.time,
     required this.messag,
@@ -41,88 +46,84 @@ class ReceivedMessage extends StatelessWidget {
     required this.receivedFile,
     this.repliedId,
   }) : super(key: key);
+
+  @override
+  State<ReceivedMessage> createState() => _ReceivedMessageState();
+}
+
+class _ReceivedMessageState extends State<ReceivedMessage> {
   updateSeen(String msgId) async {
-    if (userNow == 1) {
+    if (widget.userNow == 1) {
       //group
+      
+
+print("updating group seen now ####################%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%");
       List<dynamic> logged = await SecureStorageService().readByKeyData("user");
       String whoSee = logged[0];
       DocumentReference refs =
           FirebaseFirestore.instance.collection("GroupMessages").doc(msgId);
       refs.get().then((value) {
-        List saws = value["seen"];
-        List saws2 = value["seen"];
-        bool see = false;
-        if (saws.isEmpty) {
-          saws.add(whoSee);
-        } else {
-          for (var s in saws) {
-            if (s == whoSee) {
-              //kashaona
-              see = true;
-            }
+          List saws=value["seen"];
+          
+          if(!saws.contains(whoSee)){
+              saws.add(whoSee);
+              final json={"seen":saws};
+              refs.update(json).whenComplete((){
+                print("this message seen completed.................)))))))))))))))");
+              });
           }
-          if (!see) {
-            saws.add(whoSee);
-          }
-        }
-        if(saws2.length!=saws.length){
-        final json = {"seen": saws};
-        refs.update(json).whenComplete(() async {
-          print("seen updated successfully..............user $saws.......saws message ${value["msg"]}");
-          List localmsgs =
-              await SecureStorageService().readModalData("grpMessages");
-          for (var msg = 0; msg < localmsgs.length; msg++) {
-            List sawss = localmsgs[msg][7];
-            if (localmsgs[msg][0] == msgId && !sawss.contains(whoSee)) {
-              //perform changess
-              sawss.add(whoSee);
-              localmsgs[msg][7] = saws;
-              Modal mysms = Modal("grpMessages", localmsgs);
-              await SecureStorageService().writeModalData(mysms);
-              // print("changess performed written sucesssssssfull in received");
-            }
-          }
-        });
-        }
-
       });
     } else {
       //normal user
       final json = {"seen": "1"};
+      // List localmsgss =
+      //     await SecureStorageService().readAllMsgData("messages");
       DocumentReference ref =
           FirebaseFirestore.instance.collection("Messages").doc(msgId);
       ref.get().then((value) {
         if (value.exists) {
-          // print("message exists.............");
-          ref.update(json).whenComplete(()async {
-            // print("seen updated successfully........user direct  .......saws message ${value["msg"]}");
-              List localmsgss =
-            await SecureStorageService().readAllMsgData("messages");
-            for(var msg=0;msg<localmsgss.length;msg++){
-              if(localmsgss[msg][0]==msgId){
-               localmsgss[msg][5]="1";
-                Modal mysmss = Modal("messages", localmsgss);
-              await SecureStorageService().writeModalData(mysmss);
-              }
-            }
-          });
+          ref.update(json);
         }
       });
+      DirectMessage? result = await DirMsgsHelper().queryById(int.parse(msgId));
+      if (result != null) {
+        result.seen = "1";
+        int res2 = await DirMsgsHelper().update(result);
+        if (res2 > 0) {
+          DirectMessage? resultt =
+              await DirMsgsHelper().queryById(int.parse(msgId));
+          print("message ${resultt!.msg} seen updated to ${resultt.seen}");
+        }
+      }
     }
+  }
+
+  String newSender = '';
+  updateSender() {
+    UserHelper().queryById(widget.sender!).then((value) {
+      if (value != null) {
+        setState(() {
+          newSender = value.firstName;
+        });
+      }
+    });
+
+  }
+late  Box<String> voicePaths;
+late Box<Uint8List> msgsFiles;
+  @override
+  void initState() {
+    voicePaths = Hive.box<String>("voice");
+     msgsFiles = Hive.box<Uint8List>("messagesFiles");
+       if (widget.sender != null) {
+      updateSender();
+    }
+    updateSeen(widget.msgId);
+    super.initState();
   }
 
   @override
   Widget build(BuildContext context) {
-    Box<Uint8List> msgsFiles = Hive.box<Uint8List>("messagesFiles");
-    if (participants != null) {
-      for (var pa in participants!) {
-        // print("compare sender and participants........${pa[3]}");
-        if (pa[3] == sender) {
-          sender = "${pa[0]} ${pa[1]}";
-        }
-      }
-    }
-    updateSeen(msgId);
     final messageTextGroup = Flexible(
         child: Column(
       children: [
@@ -137,23 +138,31 @@ class ReceivedMessage extends StatelessWidget {
                     alignment: Alignment.topLeft),
                 child: Container(
                     constraints: BoxConstraints(
-                        minWidth: 100,
+                        minWidth: 20,
                         maxWidth: DeviceUtils.getScaledWidth(context, 0.6)),
                     child: Column(
                       children: [
-                        if (sender != null)
+                        if (widget.sender != null)
                           Padding(
-                            padding: const EdgeInsets.all(14.0),
+                            padding: const EdgeInsets.all(3.0),
                             child: Row(
                               children: [
-                                Text(
-                                  sender!.length > 20 ? "" : " $sender",
-                                  style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.bold,),
+                                Padding(
+                                  padding: const EdgeInsets.only(left:8.0),
+                                  child: Text(
+                                    newSender.length > 20
+                                        ? newSender.split(" ")[0]
+                                        : newSender,
+                                    style: const TextStyle(
+                                      color: Colors.blue,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                                 )
                               ],
                             ),
                           ),
-                        if (replied_status)
+                        if (widget.replied_status)
                           Column(
                             mainAxisAlignment: MainAxisAlignment.start,
                             children: [
@@ -162,53 +171,61 @@ class ReceivedMessage extends StatelessWidget {
                                   children: [
                                     Padding(
                                       padding: const EdgeInsets.only(
-                                          top: 8.0, left: 8, bottom: 8),
+                                          top: 4.0, left: 10, bottom: 3),
                                       child: Container(
                                         color: Colors.green,
                                         width: 4,
                                       ),
                                     ),
-                                    SizedBox(
-                                      width: 2,
+                                    const SizedBox(
+                                      width: 1,
                                     ),
                                     Expanded(
                                       child: Column(
                                         children: [
-                                          if (repliedUserName != null &&
-                                              repliedUserName != "")
+                                          if (widget.repliedUserName != null &&
+                                              widget.repliedUserName != "")
                                             Row(
                                               children: [
                                                 Padding(
-                                                  padding: const EdgeInsets.only(
-                                                      top: 8.0, bottom: 8),
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 4.0, bottom: 4),
                                                   child: Text(
-                                                    repliedUserName!,
+                                                    widget.repliedUserName ==
+                                                            widget.whoIam
+                                                        ? "you"
+                                                        : widget.repliedUserName!,
                                                     style: TextStyle(
-                                                       
-                                                        color: AppColors.appColor),
+                                                        color:
+                                                            AppColors.appColor),
                                                   ),
                                                 ),
                                               ],
                                             ),
-                                          if (repliedId != null &&
-                                              msgsFiles.get(repliedId) != null)
+                                          if (widget.repliedId != null &&
+                                              msgsFiles.get(widget.repliedId) !=
+                                                  null)
                                             Padding(
-                                              padding: const EdgeInsets.only(top:10.0),
+                                              padding: const EdgeInsets.only(
+                                                  top: 5.0),
                                               child: Image.memory(
-                                                msgsFiles.get(repliedId)!,
+                                                msgsFiles
+                                                    .get(widget.repliedId)!,
                                                 width: 150,
                                                 height: 200,
                                                 fit: BoxFit.cover,
-                                                filterQuality: FilterQuality.high,
-                                                errorBuilder:
-                                                    (context, error, stackTrace) {
+                                                filterQuality:
+                                                    FilterQuality.high,
+                                                errorBuilder: (context, error,
+                                                    stackTrace) {
                                                   return Expanded(
                                                     child: Container(
                                                       width: 160,
                                                       height: 100,
                                                       child: PDFView(
-                                                        pdfData:
-                                                            msgsFiles.get(repliedId),
+                                                        pdfData: msgsFiles.get(
+                                                            widget.repliedId),
                                                         enableSwipe: true,
                                                         swipeHorizontal: true,
                                                         autoSpacing: false,
@@ -219,14 +236,22 @@ class ReceivedMessage extends StatelessWidget {
                                                 },
                                               ),
                                             ),
-                                           Expanded(
+                                          if (widget.repliedId != null &&
+                                              voicePaths
+                                                      .get(widget.repliedId) !=
+                                                  null)
+                                            AudioBubble(
+                                              filepath: voicePaths
+                                                  .get(widget.repliedId)!,
+                                            ),
+                                          Expanded(
                                             child: Padding(
                                               padding: EdgeInsets.only(
-                                                  left: 10,
-                                                  right: 20,
-                                                  top: 10,
-                                                  bottom: 10),
-                                              child: replied,
+                                                  left: 5,
+                                                  right: 5,
+                                                  top: 2,
+                                                  bottom: 5),
+                                              child: widget.replied,
                                             ),
                                           ),
                                         ],
@@ -239,10 +264,10 @@ class ReceivedMessage extends StatelessWidget {
                           ),
                         Padding(
                           padding: const EdgeInsets.only(
-                              left: 10, right: 20, top: 10, bottom: 10),
-                          child: msgsFiles.get(msgId) != null
-                              ? messag == ""
-                                  ? receivedFile.contains(".pdf")
+                              left: 4, right: 5, top: 4, bottom: 5),
+                          child: msgsFiles.get(widget.msgId) != null
+                              ? widget.messag == ""
+                                  ? widget.receivedFile.contains(".pdf")
                                       ? Container(
                                           decoration: BoxDecoration(
                                             color: Colors.grey.withOpacity(0.2),
@@ -253,7 +278,8 @@ class ReceivedMessage extends StatelessWidget {
                                           height: 200,
                                           width: 300,
                                           child: PDFView(
-                                            pdfData: msgsFiles.get(msgId),
+                                            pdfData:
+                                                msgsFiles.get(widget.msgId),
                                             enableSwipe: true,
                                             swipeHorizontal: true,
                                             autoSpacing: false,
@@ -261,14 +287,14 @@ class ReceivedMessage extends StatelessWidget {
                                           ),
                                         )
                                       : Image.memory(
-                                          msgsFiles.get(msgId)!,
+                                          msgsFiles.get(widget.msgId)!,
                                           width: 200,
                                           height: 200,
                                           fit: BoxFit.cover,
                                         )
                                   : Column(
                                       children: [
-                                        receivedFile.contains(".pdf")
+                                        widget.receivedFile.contains(".pdf")
                                             ? Container(
                                                 decoration: BoxDecoration(
                                                   color: Colors.grey
@@ -280,7 +306,8 @@ class ReceivedMessage extends StatelessWidget {
                                                 height: 200,
                                                 width: 300,
                                                 child: PDFView(
-                                                  pdfData: msgsFiles.get(msgId),
+                                                  pdfData: msgsFiles
+                                                      .get(widget.msgId),
                                                   enableSwipe: true,
                                                   swipeHorizontal: true,
                                                   autoSpacing: false,
@@ -288,17 +315,28 @@ class ReceivedMessage extends StatelessWidget {
                                                 ),
                                               )
                                             : Image.memory(
-                                                msgsFiles.get(msgId)!,
+                                                msgsFiles.get(widget.msgId)!,
                                                 width: 200,
                                                 height: 200,
                                                 fit: BoxFit.cover,
                                               ),
                                         Padding(
-                                            padding: const EdgeInsets.all(8),
-                                            child: child)
+                                            padding: const EdgeInsets.all(3),
+                                            child:
+                                                voicePaths.get(widget.msgId) !=
+                                                        null
+                                                    ? AudioBubble(
+                                                        filepath: voicePaths
+                                                            .get(widget.msgId)!,
+                                                      )
+                                                    : widget.child)
                                       ],
                                     )
-                              : child,
+                              : voicePaths.get(widget.msgId) != null
+                                  ? AudioBubble(
+                                      filepath: voicePaths.get(widget.msgId)!,
+                                    )
+                                  : Padding(padding: const EdgeInsets.only(left: 6),child: widget.child,),
                         ),
                       ],
                     )),
@@ -312,16 +350,9 @@ class ReceivedMessage extends StatelessWidget {
         Row(
           children: [
             Text(
-              time,
+              widget.time,
               textAlign: TextAlign.right,
-              // style: SafeGoogleFont (
-              //   'SF Pro Text',
-              //   fontSize: 12,
-              //   fontWeight: FontWeight.w400,
-              //   height: 1.2575,
-              //   letterSpacing: 1,
-              //   color: Color(0xff77838f),
-              // ),
+            
             ),
             Spacer(),
           ],
@@ -330,12 +361,12 @@ class ReceivedMessage extends StatelessWidget {
     ));
 
     return Padding(
-      padding: EdgeInsets.only(right: 10.0, left: 10, top: 5, bottom: 5),
+      padding: const EdgeInsets.only(right: 4.0, left: 4, top: 3, bottom: 3),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.start,
         children: <Widget>[
           messageTextGroup,
-          SizedBox(height: 30),
+          const SizedBox(height: 6),
         ],
       ),
     );

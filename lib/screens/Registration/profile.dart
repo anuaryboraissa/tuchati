@@ -1,13 +1,12 @@
+import "package:firebase_storage/firebase_storage.dart" as storage;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:tuchati/constants/app_colors.dart';
 import 'package:tuchati/screens/Animation/FadeAnimation.dart';
 import 'package:tuchati/screens/main_tab_bar/main_tab_bar.dart';
+import 'package:tuchati/screens/page/progress/progress.dart';
 import 'package:tuchati/services/firebase.dart';
 import 'package:tuchati/services/secure_storage.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/widgets.dart';
-
-import '../../main.dart';
-import '../../services/cloud_messaging.dart';
 
 class Profile extends StatefulWidget {
   const Profile({super.key, required this.phone, required this.uid});
@@ -38,27 +37,7 @@ class _ProfileState extends State<Profile> {
                         fit: BoxFit.fill)),
                 child: Stack(
                   children: <Widget>[
-                    Padding(
-                      padding: const EdgeInsets.only(top: 38.0),
-                      child: GestureDetector(
-                        child: Positioned(
-                          top: 40,
-                          left: 5,
-                          width: 10,
-                          height: 10,
-                          child: FadeAnimation(
-                              1,
-                              IconButton(
-                                  onPressed: () {
-                                    Navigator.of(context).pop();
-                                  },
-                                  icon: Icon(
-                                    Icons.arrow_back_ios_new,
-                                    color: Colors.white,
-                                  ))),
-                        ),
-                      ),
-                    ),
+               
                     Positioned(
                       top: 80,
                       left: 20,
@@ -67,7 +46,7 @@ class _ProfileState extends State<Profile> {
                       child: FadeAnimation(
                           1,
                           Container(
-                            decoration: BoxDecoration(
+                            decoration: const BoxDecoration(
                                 image: DecorationImage(
                                     image: AssetImage(
                                         'assets/images/light-1.png'))),
@@ -121,13 +100,13 @@ class _ProfileState extends State<Profile> {
                 ),
               ),
               Padding(
-                padding: EdgeInsets.all(30.0),
+                padding: const EdgeInsets.all(30.0),
                 child: Column(
                   children: <Widget>[
                     FadeAnimation(
                         1.8,
                         Container(
-                          padding: EdgeInsets.all(5),
+                          padding: const EdgeInsets.all(5),
                           decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(10),
@@ -245,23 +224,36 @@ class _ProfileState extends State<Profile> {
 
   void saveData(String text, String text2) async {
     //  String? notifyToken = await CloudMessaging().getMyToken();
-    List<String> userdata = [widget.uid, text, text2, widget.phone,""];
+    //  upload profile
+    await Progresshud.initializeDialogue(context);
+    await Progresshud.show("Registering user....");
+    final ByteData bytes = await rootBundle.load('assets/images/profile.png');
+    storage.UploadTask task;
+    storage.Reference ref=storage.FirebaseStorage.instance.ref().child("UserProfiles").child("/${widget.uid}");
+    task=ref.putData(bytes.buffer.asUint8List());
+    task.whenComplete(()async {
+    String url=await ref.getDownloadURL();
+    List<String> userdata = [widget.uid, text, text2, widget.phone,"Hey there i'm using tuchati"];
     StorageItem item = StorageItem("user", userdata);
     SecureStorageService().writeSecureData(item);
+    // ignore: use_build_context_synchronously
     bool result = await FirebaseService()
-        .postUserData(widget.uid, text, text2, widget.phone, context);
+        .postUserData(widget.uid, text, text2, widget.phone, context,url);
     if (result) {
       setState(() {
         attempt = false;
       });
-         contactsCallback();
+         await Progresshud.dismiss();
       // ignore: use_build_context_synchronously
       Navigator.popUntil(context, (route) => route.isFirst);
       // ignore: use_build_context_synchronously
       Navigator.of(context).pushReplacement(MaterialPageRoute(
         builder: (context) => const MainTabBar(),
       ));
-    
+     
     }
+     });
+   
+
   }
 }

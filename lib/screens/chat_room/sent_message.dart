@@ -4,14 +4,19 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
 import 'package:hive/hive.dart';
+import 'package:intl/intl.dart';
 
 import 'package:tuchati/device_utils.dart';
 import 'package:tuchati/screens/chat_room/widgets/chat_bubble.dart';
 import 'package:tuchati/utils.dart';
 
 import '../../../constants/app_colors.dart';
+import '../../services/SQLite/modelHelpers/dirMsgsHelper.dart';
+import '../../services/SQLite/modelHelpers/userHelper.dart';
+import '../../services/SQLite/models/user.dart';
+import '../recording/src/widgets/audio_bubble.dart';
 
-class SentMessage extends StatelessWidget {
+class SentMessage extends StatefulWidget {
   final Widget child;
   final String messag;
   final bool sent;
@@ -22,6 +27,8 @@ class SentMessage extends StatelessWidget {
   final String? repliedId;
   final String? repliedUserName;
   final String? repliedFile;
+  final String seen;
+  final String date;
   const SentMessage({
     Key? key,
     required this.child,
@@ -34,41 +41,63 @@ class SentMessage extends StatelessWidget {
     this.repliedId,
     this.repliedUserName,
     this.repliedFile,
+    required this.seen,
+    required this.date,
   }) : super(key: key);
+
+  @override
+  State<SentMessage> createState() => _SentMessageState();
+}
+
+class _SentMessageState extends State<SentMessage> {
+  String newReplayedSender = '';
+
   checkIfSeen() async {
     Box<String> msgs = Hive.box<String>("messages");
     FirebaseFirestore.instance
         .collection("GroupMessages")
-        .doc(msgId)
+        .doc(widget.msgId)
         .get()
         .then(
       (value) {
         if (value.exists) {
           List seenn = value["seen"];
           if (seenn.length > 1) {
-            msgs.put(msgId, "1");
+            msgs.put(widget.msgId, "1");
           }
         }
       },
     );
-    FirebaseFirestore.instance.collection("Messages").doc(msgId).get().then(
+    FirebaseFirestore.instance
+        .collection("Messages")
+        .doc(widget.msgId)
+        .get()
+        .then(
       (value) {
         if (value.exists) {
           if (value["seen"] == "1") {
-            msgs.put(msgId, "1");
+            msgs.put(widget.msgId, "1");
           }
         }
       },
     );
   }
+ late Box<String> voicePaths;
+ late  Box<String> msgs;
+ late Box<Uint8List> msgsFiles;
+ String formattedDate="";
+@override
+  void initState() {
+
+    msgs = Hive.box<String>("messages");
+    voicePaths= Hive.box<String>("voice");
+    msgsFiles = Hive.box<Uint8List>("messagesFiles");
+    checkIfSeen();
+    super.initState();
+  }
 
   @override
   Widget build(BuildContext context) {
-    // print("${repliedUserName==null} for $messag...................................");
-    checkIfSeen();
-    Box<String> msgs = Hive.box<String>("messages");
-    Box<Uint8List> msgsFiles = Hive.box<Uint8List>("messagesFiles");
-
     final messageTextGroup = Flexible(
         child: Column(
       children: [
@@ -82,15 +111,15 @@ class SentMessage extends StatelessWidget {
                     color: AppColors.appColor, alignment: Alignment.topRight),
                 child: Container(
                   constraints: BoxConstraints(
-                      minWidth: 100,
+                      minWidth: 20,
                       maxWidth: DeviceUtils.getScaledWidth(context, 0.6)),
-                  child: !replied
+                  child: !widget.replied
                       ? Padding(
                           padding: const EdgeInsets.only(
-                              left: 10, right: 20, top: 10, bottom: 10),
-                          child: msgsFiles.get(msgId) != null
-                              ? messag == ""
-                                  ? sentFile.contains(".pdf")
+                              left: 3, right: 4, top: 3, bottom: 3),
+                          child: msgsFiles.get(widget.msgId) != null
+                              ? widget.messag == ""
+                                  ? widget.sentFile.contains(".pdf")
                                       ? Container(
                                           decoration: BoxDecoration(
                                             color: Colors.grey.withOpacity(0.2),
@@ -101,7 +130,8 @@ class SentMessage extends StatelessWidget {
                                           height: 200,
                                           width: 300,
                                           child: PDFView(
-                                            pdfData: msgsFiles.get(msgId),
+                                            pdfData:
+                                                msgsFiles.get(widget.msgId),
                                             enableSwipe: true,
                                             swipeHorizontal: true,
                                             autoSpacing: false,
@@ -109,14 +139,14 @@ class SentMessage extends StatelessWidget {
                                           ),
                                         )
                                       : Image.memory(
-                                          msgsFiles.get(msgId)!,
+                                          msgsFiles.get(widget.msgId)!,
                                           width: 200,
                                           height: 200,
                                           fit: BoxFit.cover,
                                         )
                                   : Column(
                                       children: [
-                                        sentFile.contains(".pdf")
+                                        widget.sentFile.contains(".pdf")
                                             ? Container(
                                                 decoration: BoxDecoration(
                                                   color: Colors.grey
@@ -128,7 +158,8 @@ class SentMessage extends StatelessWidget {
                                                 height: 200,
                                                 width: 300,
                                                 child: PDFView(
-                                                  pdfData: msgsFiles.get(msgId),
+                                                  pdfData: msgsFiles
+                                                      .get(widget.msgId),
                                                   enableSwipe: true,
                                                   swipeHorizontal: true,
                                                   autoSpacing: false,
@@ -136,17 +167,29 @@ class SentMessage extends StatelessWidget {
                                                 ),
                                               )
                                             : Image.memory(
-                                                msgsFiles.get(msgId)!,
+                                                msgsFiles.get(widget.msgId)!,
                                                 width: 200,
                                                 height: 200,
                                                 fit: BoxFit.cover,
                                               ),
                                         Padding(
-                                            padding: const EdgeInsets.all(8),
-                                            child: child)
+                                            padding: const EdgeInsets.all(3),
+                                            child:
+                                                voicePaths.get(widget.msgId) !=
+                                                        null
+                                                    ? AudioBubble(
+                                                        filepath: voicePaths
+                                                            .get(widget.msgId)!,
+                                                      )
+                                                    : widget.child),
+                                                     
                                       ],
                                     )
-                              : child,
+                              : voicePaths.get(widget.msgId) != null
+                                  ? AudioBubble(
+                                      filepath: voicePaths.get(widget.msgId)!,
+                                    )
+                                  : widget.child,
                         )
                       : Column(
                           mainAxisAlignment: MainAxisAlignment.start,
@@ -156,27 +199,27 @@ class SentMessage extends StatelessWidget {
                                 children: [
                                   Padding(
                                     padding: const EdgeInsets.only(
-                                        top: 8.0, bottom: 8, left: 8),
+                                        top: 3.0, bottom: 3, left: 3),
                                     child: Container(
                                       color: Colors.green,
                                       width: 4,
                                     ),
                                   ),
                                   const SizedBox(
-                                    width: 2,
+                                    width: 1,
                                   ),
                                   Expanded(
                                     child: Column(
                                       children: [
-                                        if (repliedUserName != null)
+                                        if (widget.repliedUserName != null)
                                           Row(
                                             children: [
                                               Padding(
                                                 padding: const EdgeInsets.only(
-                                                    top: 8.0, bottom: 8),
+                                                    top: 3.0, bottom: 3),
                                                 child: Text(
-                                                  repliedUserName!,
-                                                  style: TextStyle(
+                                                  widget.repliedUserName!,
+                                                  style: const TextStyle(
                                                       fontWeight:
                                                           FontWeight.bold,
                                                       color: Colors.white54),
@@ -184,13 +227,14 @@ class SentMessage extends StatelessWidget {
                                               ),
                                             ],
                                           ),
-                                        if (repliedId != null &&
-                                            msgsFiles.get(repliedId) != null)
+                                        if (widget.repliedId != null &&
+                                            msgsFiles.get(widget.repliedId) !=
+                                                null)
                                           Padding(
                                             padding: const EdgeInsets.only(
-                                                top: 10.0),
+                                                top: 4.0),
                                             child: Image.memory(
-                                              msgsFiles.get(repliedId)!,
+                                              msgsFiles.get(widget.repliedId)!,
                                               width: 150,
                                               height: 200,
                                               fit: BoxFit.cover,
@@ -201,12 +245,12 @@ class SentMessage extends StatelessWidget {
                                                   child: Container(
                                                     margin:
                                                         const EdgeInsets.only(
-                                                            top: 10),
+                                                            top: 4),
                                                     width: 160,
                                                     height: 150,
                                                     child: PDFView(
-                                                      pdfData: msgsFiles
-                                                          .get(repliedId),
+                                                      pdfData: msgsFiles.get(
+                                                          widget.repliedId),
                                                       enableSwipe: true,
                                                       swipeHorizontal: true,
                                                       autoSpacing: false,
@@ -217,14 +261,21 @@ class SentMessage extends StatelessWidget {
                                               },
                                             ),
                                           ),
+                                        if (widget.repliedId != null &&
+                                            voicePaths.get(widget.repliedId) !=
+                                                null)
+                                          AudioBubble(
+                                            filepath: voicePaths
+                                                .get(widget.repliedId)!,
+                                          ),
                                         Padding(
                                           padding: const EdgeInsets.only(
-                                              left: 10,
-                                              right: 20,
-                                              top: 10,
-                                              bottom: 10),
+                                              left: 4,
+                                              right: 5,
+                                              top: 3,
+                                              bottom: 4),
                                           child: Text(
-                                            "$replymsg",
+                                            "${widget.replymsg}",
                                             style: SafeGoogleFont('SF Pro Text',
                                                 fontSize: 14,
                                                 fontWeight: FontWeight.w400,
@@ -239,9 +290,9 @@ class SentMessage extends StatelessWidget {
                                 ],
                               ),
                             ),
-                            if (msgsFiles.get(msgId) != null)
-                              if (sentFile != "0")
-                                sentFile.contains(".pdf")
+                            if (msgsFiles.get(widget.msgId) != null)
+                              if (widget.sentFile != "0")
+                                widget.sentFile.contains(".pdf")
                                     ? Container(
                                         decoration: BoxDecoration(
                                           color: Colors.grey.withOpacity(0.2),
@@ -251,7 +302,7 @@ class SentMessage extends StatelessWidget {
                                         height: 200,
                                         width: 300,
                                         child: PDFView(
-                                          pdfData: msgsFiles.get(msgId),
+                                          pdfData: msgsFiles.get(widget.msgId),
                                           enableSwipe: true,
                                           swipeHorizontal: true,
                                           autoSpacing: false,
@@ -259,20 +310,25 @@ class SentMessage extends StatelessWidget {
                                         ),
                                       )
                                     : Image.memory(
-                                        msgsFiles.get(msgId)!,
+                                        msgsFiles.get(widget.msgId)!,
                                         width: 200,
                                         height: 200,
                                         fit: BoxFit.cover,
                                       ),
                             Padding(
                               padding: const EdgeInsets.only(
-                                  left: 10, right: 20, top: 10, bottom: 10),
-                              child: child,
-                            )
+                                  left: 4, right: 5, top: 4, bottom: 4),
+                              child: voicePaths.get(widget.msgId) != null
+                                  ? AudioBubble(
+                                      filepath: voicePaths.get(widget.msgId)!,
+                                    )
+                                  : widget.child,
+                            ),
                           ],
                         ),
                 ),
               ),
+               
             ],
           ),
         ),
@@ -284,13 +340,13 @@ class SentMessage extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Spacer(),
-            msgs.get(msgId) != null
+            msgs.get(widget.msgId) != null
                 ? Padding(
                     padding: const EdgeInsets.only(right: 8.0),
                     child: Row(
                       children: [
                         Icon(Icons.check,
-                            color: msgs.get(msgId) == "1"
+                            color: msgs.get(widget.msgId) == "1"
                                 ? Colors.blue
                                 : Colors.black45,
                             size: 15),
@@ -298,7 +354,7 @@ class SentMessage extends StatelessWidget {
                           width: 1,
                         ),
                         Icon(Icons.check,
-                            color: msgs.get(msgId) == "1"
+                            color: msgs.get(widget.msgId) == "1"
                                 ? Colors.blue
                                 : Colors.black45,
                             size: 15),
@@ -306,7 +362,7 @@ class SentMessage extends StatelessWidget {
                     ),
                   )
                 : const Padding(
-                    padding: EdgeInsets.only(right: 8.0),
+                    padding: EdgeInsets.only(right: 3.0),
                     child: Icon(Icons.check, color: Colors.black45, size: 15),
                   ),
           ],
@@ -315,11 +371,11 @@ class SentMessage extends StatelessWidget {
     ));
 
     return Padding(
-      padding: const EdgeInsets.only(right: 10.0, left: 10, top: 5, bottom: 5),
+      padding: const EdgeInsets.only(right: 4.0, left: 4, top: 2, bottom: 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: <Widget>[
-          const SizedBox(height: 30),
+          const SizedBox(height: 10),
           messageTextGroup,
         ],
       ),

@@ -6,8 +6,11 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:get/get_core/src/get_main.dart';
 import 'package:hive/hive.dart';
+import 'package:intl/intl.dart';
 
 import 'package:tuchati/screens/chat_room/chat_room.dart';
+import 'package:tuchati/services/SQLite/models/grpDetails.dart';
+import 'package:tuchati/services/SQLite/models/msgDetails.dart';
 import 'package:tuchati/services/firebase.dart';
 import 'package:tuchati/services/secure_storage.dart';
 import 'package:tuchati/utils.dart';
@@ -19,36 +22,49 @@ class ChatUserListCardWidget extends StatefulWidget {
   const ChatUserListCardWidget({
     Key? key,
     required this.name,
-    required this.isOnline,
     required this.message,
     required this.unReadCount,
     required this.isUnReadCountShow,
     required this.time,
-    required this.user,
+    this.user,
+    this.group,
   }) : super(key: key);
 
   final String name;
-  final bool isOnline;
   final String message;
   final String unReadCount;
   final bool isUnReadCountShow;
   final String time;
-  final List<dynamic> user;
+  final DirMsgDetails? user;
+  final GroupMsgDetails? group;
   @override
   State<ChatUserListCardWidget> createState() => _ChatUserListCardWidgetState();
 }
 
 class _ChatUserListCardWidgetState extends State<ChatUserListCardWidget> {
-bool isNumeric(String s) {
-      // ignore: unnecessary_null_comparison
-      if (s == null) {
-        return false;
-      }
-      return double.tryParse(s) != null;
+  bool isNumeric(String s) {
+    // ignore: unnecessary_null_comparison
+    if (s == null) {
+      return false;
     }
+    return double.tryParse(s) != null;
+  }
+ String formattedDate="";
+ late Box<Uint8List> groupsIcon;
+ late Box<Uint8List> myProfile;
+  @override
+  void initState() {
+    DateTime now = DateTime.now();
+    myProfile= Hive.box<Uint8List>("myProfile");
+    groupsIcon= Hive.box<Uint8List>("groups");
+    setState(() {
+    formattedDate = DateFormat('yyyy-MM-dd').format(now);
+    });
+    super.initState();
+  }
+
   @override
   Widget build(BuildContext context) {
-   Box<Uint8List> groupsIcon=Hive.box<Uint8List>("groups");
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10),
       child: Row(
@@ -58,38 +74,22 @@ bool isNumeric(String s) {
               Container(
                 width: 55,
                 height: 55,
-                decoration:  BoxDecoration(
+                decoration: BoxDecoration(
                   image: DecorationImage(
-                      image: isNumeric(widget.user[0])? groupsIcon.get(widget.user[0])==null? MemoryImage(groupsIcon.get("groupDefault")!): MemoryImage(groupsIcon.get(widget.user[0])!):MemoryImage(groupsIcon.get("userDefault")!), 
+                      image: widget.user==null
+                          ? groupsIcon.get(widget.group!.grpId.toString()) == null
+                              ? MemoryImage(groupsIcon.get("groupDefault")!)
+                              : MemoryImage(groupsIcon.get(widget.group!.grpId.toString())!)
+                          : myProfile.get(widget.user!.userId) == null
+                              ? MemoryImage(groupsIcon.get("userDefault")!)
+                              : MemoryImage(myProfile.get(widget.user!.userId)!),
                       fit: BoxFit.fill),
                   shape: BoxShape.circle,
                 ),
               ),
-              if (widget.isOnline)
-                Positioned(
-                  bottom: 0,
-                  right: 0,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: AppColors.backGroundColor,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(1.5),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: AppColors.green,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
             ],
           ),
-          CustomWidthSpacer(
+          const CustomWidthSpacer(
             size: 0.03,
           ),
           Expanded(
@@ -107,20 +107,24 @@ bool isNumeric(String s) {
                     color: Color(0xff1e2022),
                   ),
                 ),
-                 widget.message=="you: "? Row(children: [
-                  Text(widget.message),
-                  const Icon(Icons.file_copy)
-                 ],): Text(
-                  widget.message,
-                  style: SafeGoogleFont(
-                    'SF Pro Text',
-                    fontSize: 12,
-                    fontWeight: FontWeight.w400,
-                    height: 1.8333333333,
-                    letterSpacing: 1,
-                    color: Color(0xff77838f),
-                  ),
-                )
+                   Row(
+                        children: [
+                         if(widget.group!=null) Text("${widget.group!.lastSender}: ",style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400,
+                          height: 1.8333333333,
+                          letterSpacing: 1,),),
+                          Text(widget.message,
+                          style: SafeGoogleFont(
+                          'SF Pro Text',
+                          fontSize: 12,
+                          fontWeight: FontWeight.w400,
+                          height: 1.8333333333,
+                          letterSpacing: 1,
+                          color: Color(0xff77838f),
+                        ),),
+                        
+                        ],
+                      )
+                   
               ],
             ),
           ),
@@ -130,7 +134,7 @@ bool isNumeric(String s) {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                widget.time,
+               widget.time.split(" ")[0]==formattedDate?widget.time.split(" ")[1]: widget.time.split(" ")[0],
                 textAlign: TextAlign.right,
                 style: SafeGoogleFont(
                   'SF Pro Text',
@@ -171,6 +175,4 @@ bool isNumeric(String s) {
       ),
     );
   }
-
-
 }

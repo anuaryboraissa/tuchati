@@ -2,10 +2,11 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
-// / import 'package:emoji_picker/emoji_picker.dart';
+// import 'package:emoji_picker/emoji_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
 import 'package:hive/hive.dart';
@@ -16,9 +17,13 @@ import 'package:path/path.dart' as path;
 import 'package:swipe_to/swipe_to.dart';
 import 'package:tuchati/screens/chat_room/received_message.dart';
 import 'package:tuchati/screens/chat_room/sent_message.dart';
+import 'package:tuchati/screens/page/dialogue/dialogueBoxes.dart';
 import 'package:tuchati/screens/page/groupInfo.dart';
 import 'package:tuchati/screens/recording/src/widgets/audio_bubble.dart';
 import 'package:tuchati/screens/recording/src/widgets/record_button.dart';
+import 'package:tuchati/services/SQLite/modelHelpers/userHelper.dart';
+import 'package:tuchati/services/SQLite/models/groupMessages.dart';
+import 'package:tuchati/services/SQLite/models/user.dart';
 import 'package:tuchati/services/fileshare.dart';
 import 'package:tuchati/services/firebase.dart';
 import 'package:tuchati/services/groups.dart';
@@ -28,23 +33,29 @@ import 'package:tuchati/widgets/spacer/spacer_custom.dart';
 
 import '../../../constants/app_colors.dart';
 import '../../../device_utils.dart';
-
-// class ChatMessage {
-//   String messageContent;
-//   String messageType;
-//   ChatMessage({required this.messageContent, required this.messageType});
-// }
+import '../../services/SQLite/modelHelpers/dirMsgsHelper.dart';
+import '../../services/SQLite/modelHelpers/directsmsdetails.dart';
+import '../../services/SQLite/modelHelpers/grpMsgsHelper.dart';
+import '../../services/SQLite/models/dirMessages.dart';
+import '../../services/SQLite/models/grpDetails.dart';
+import '../../services/SQLite/models/msgDetails.dart';
+import '../../services/SQLite/updateDetails.dart';
+import '../page/progress/progress.dart';
 
 class ChatRoomPage extends StatefulWidget {
   const ChatRoomPage({
     Key? key,
-    required this.user,
+    this.user,
+    this.group,
     required this.name,
     required this.iam,
+    required this.fromDetails,
   }) : super(key: key);
-  final List<dynamic> user;
+  final DirMsgDetails? user;
+  final GroupMsgDetails? group;
   final String name;
   final String iam;
+  final bool fromDetails;
   @override
   _ChatRoomPageState createState() => _ChatRoomPageState();
 }
@@ -55,8 +66,18 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   late AnimationController controller;
   Box<String>? voicePaths;
   // Timer
+  String newSender = '';
+  updateSender(String id) {
+    UserHelper().queryById(id).then((value) {
+      if (value != null) {
+        setState(() {
+          newSender = value.firstName;
+        });
+      }
+    });
+  }
 
-////////////////////////////////////////////////////////////////
+  late Box<List<String>> grpLetfs;
 
   final TextEditingController message = TextEditingController();
   String voiceNoteMsg = "";
@@ -65,34 +86,52 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   String receiver = '';
   bool sent = false;
   Future<List>? data;
-  List groupMemb = [];
-  List groupAdm = [];
+  List<MyUser?> groupMemb = [];
+  List<MyUser?> groupAdm = [];
   bool initScroll = false;
-
-  bool isNumeric(String s) {
-    // ignore: unnecessary_null_comparison
-    if (s == null) {
-      return false;
-    }
-    return double.tryParse(s) != null;
+  bool isOnline = false;
+  String lastSeen = "";
+  isUserOnline() {
+    FirebaseFirestore.instance
+        .collection("Users")
+        .doc(widget.user!.userId)
+        .get()
+        .then((value) {
+      if (value["online_status"]) {
+        setState(() {
+          isOnline = true;
+        });
+      } else {
+        setState(() {
+          isOnline = false;
+          lastSeen = value["last_seen"];
+        });
+      }
+    });
   }
 
+  bool stopOnlineCheck = false;
+
   String senderName = '';
-  void loadSms() async {
+  String myName = "";
+  List log = [];
+  void loadSms() {
     SecureStorageService().readByKeyData("user").then(
       (value) {
         setState(() {
+          log = value;
           sender = value[0];
           senderName = value[1];
-          receiver = widget.user[0];
+          if (widget.user != null) {
+            receiver = widget.user!.userId;
+          }
+          myName = "${value[1]} ${value[2]}";
         });
       },
     );
-    timer = Timer(
-      const Duration(seconds: 5),
-      () {},
-    );
   }
+
+  List<String> participants = [];
 
   bool isTyping = false;
   var heightt = 50;
@@ -110,26 +149,130 @@ class _ChatRoomPageState extends State<ChatRoomPage>
   }
 
   Stream<List> _dataOfferSwitch() async* {
-    if (isNumeric(widget.user[0])) {
-      data =
-          SecureStorageService().readGrpMsgData("grpMessages", widget.user[0]);
-      yield* Stream.fromFuture(data!);
-    } else {
-      data = SecureStorageService()
-          .readMsgData("messages", widget.iam, widget.user[0]);
-      yield* Stream.fromFuture(data!);
-    }
+    yield* Stream.fromFuture(
+        GrpMsgsHelper().queryByGrp(widget.group!.grpId.toString()));
   }
 
-  late Stream<Future<List>> dataa;
+  clearNormalChat() {
+    DirMsgsHelper().queryByFields(widget.user!.userId, sender).then((value) {
+      value.forEach((element) {
+        DirMsgsHelper().delete(element!.msgId).then((value) {
+          if (value > 0) {
+            print("message ${element.msg} delete successfully............");
+          }
+        });
+      });
+    });
+  }
+
+  clearGroupChat() {
+    GrpMsgsHelper().queryByGrp(widget.group!.grpId.toString()).then((value) {
+      value.forEach((element) {
+        GrpMsgsHelper().delete(element!.msgId).then((value) {
+          if (value > 0) {
+            print("message ${element.msg} delete successfully............");
+            // DocumentReference ref = FirebaseFirestore.instance
+            //     .collection("Clear")
+            //     .doc(widget.group!.grpId.toString());
+            // ref.get().then((value) {
+            //   DateTime now = DateTime.now();
+            //   String formattedDate =
+            //       DateFormat('yyyy-MM-dd HH:mm:ss').format(now);
+            //   if (value.exists) {
+            //     List users = value["users"];
+            //     if (users.contains(sender)) {
+            //       final json = {sender: formattedDate};
+            //       ref.update(json).whenComplete(() {
+            //         print("uset clear date updated__________________");
+            //       });
+            //     } else {
+            //       users.add(sender);
+            //       final json = {"users": users, sender: formattedDate};
+            //       ref.update(json).whenComplete(() {
+            //         print("user clear updated successfully____________________");
+            //       });
+            //     }
+            //   } else {
+            //     List users = [];
+            //     users.add(sender);
+            //     final json = {"users": users, sender: formattedDate};
+            //     ref.set(json).whenComplete(() {
+            //       print("user clear setted successfully____________________");
+            //     });
+            //   }
+            // });
+          }
+        });
+      });
+    });
+  }
+
+  leftGroup() async {
+    Box<List<String>> grpLetfs = Hive.box<List<String>>("lefts");
+    List<String>? lefts = grpLetfs.get(sender);
+    if (lefts != null) {
+      if (!lefts.contains(widget.group!.grpId.toString())) {
+        lefts.add(widget.group!.grpId.toString());
+        grpLetfs.put(sender, lefts);
+      }
+    } else {
+      List<String> groups = [];
+      groups.add(widget.group!.grpId.toString());
+      grpLetfs.put(sender, groups);
+    }
+    clearGroupChat();
+
+    DocumentReference ref = FirebaseFirestore.instance
+        .collection("GroupLefts")
+        .doc(widget.group!.grpId.toString());
+    ref.get().then((value) {
+      List users = [];
+      if (value.exists) {
+        users = value["users"];
+        if (!users.contains(sender)) {
+          users.add(sender);
+          final json = {"users": users};
+          ref.set(json).whenComplete(() {
+            print("Left group ${widget.group!.name} completed____________");
+            Navigator.pop(context);
+          });
+        }
+      } else {
+        List users = [];
+        users.add(sender);
+        final json = {"users": users};
+        ref.set(json).whenComplete(() {
+          print("Left group ${widget.group!.name} completed____________");
+          Navigator.pop(context);
+        });
+      }
+    });
+    await Progresshud.mySnackBar(
+        context, "you have successfully left ${widget.group!.name}");
+  }
+
+  Stream<List<DirectMessage?>> directChats() async* {
+    yield* Stream.fromFuture(
+        DirMsgsHelper().queryByFields(widget.user!.userId, sender));
+  }
+
+  // late Stream<Future<List>> dataa;
   String reply_to_msg = "";
   String msgSender = "";
   String replied_msg = "";
   String repliedFile = "";
   bool isAdmnin = false;
   late Box<Uint8List> groupsIcon;
+  // loadGroupMessagesDetails() async {
+  //   await FirebaseService().groupMsgsDetails();
+  // }
+
   @override
   void initState() {
+    grpLetfs = Hive.box<List<String>>("lefts");
+    if (widget.user != null) {
+      isUserOnline();
+    }
     voicePaths = Hive.box<String>("voice");
     controller = AnimationController(
       vsync: this,
@@ -137,12 +280,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     );
     groupsIcon = Hive.box<Uint8List>("groups");
     loadSms();
+    if (widget.user == null) {
+      filterGroupDetails();
+    }
     // recorder.init();
     super.initState();
     _scrollcontroller = ScrollController();
   }
 
   void bottomScroll() {
+    print("bottom scroll caled^^^^^^^^^^^^^^^");
     final bottomoffset = _scrollcontroller.position.maxScrollExtent;
     _scrollcontroller.animateTo(bottomoffset,
         duration: const Duration(microseconds: 1000), curve: Curves.easeInOut);
@@ -171,50 +318,38 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     //     "file send is .....$filesend and...............file bytes .${myfile == null}");
   }
 
+  filterGroupDetails() {
+    UserHelper().queryAdmins(widget.group!.grpId).then((value) {
+      setState(() {
+        groupAdm = value;
+      });
+    });
+    UserHelper().queryParticipants(widget.group!.grpId).then((value) {
+      setState(() {
+        groupMemb = value;
+      });
+    });
+  }
+
   int imeingia = 0;
   @override
   Widget build(BuildContext context) {
-    //heyy
-
-    // print("yeah is focus node ${focusNode.hasFocus}....");
     if (imeingia < 2) {
-      GroupService().getGroupparticipants(widget.user[0]).then(
-        (value) {
-          setState(() {
-            groupMemb = value;
-          });
-        },
-      );
-      GroupService().getGroupAdmins(widget.user[0]).then(
-        (value) {
-          groupAdm = value;
-        },
-      );
-      setState(() {
-        if (isNumeric(widget.user[0])) {
-          data = SecureStorageService()
-              .readGrpMsgData("grpMessages", widget.user[0]);
-        } else {
-          data = SecureStorageService()
-              .readMsgData("messages", widget.iam, widget.user[0]);
+      if (widget.user == null) {
+        print("total participants $participants...............");
+        for (var x in groupAdm) {
+          if (x!.id == sender) {
+            setState(() {
+              imeingia = imeingia + 1;
+              isAdmnin = true;
+            });
+          }
         }
-        imeingia = imeingia + 1;
-      });
-    }
-
-    for (var x in groupAdm) {
-      if (x[0] == senderName) {
-        setState(() {
-          // print("yeah is admin hereeeeeeeeeeeeeeeee.........");
-          isAdmnin = true;
-        });
       }
     }
-
-    List<String> menuitems = isNumeric(widget.user[0])
-        ? ["clear", isAdmnin ? "edit" : "exit", "achieve"]
-        : ["achieve", "clear"];
-    // print("file send now....$filesend file bytes ${fileBytes == null}");
+    List<String> menuitems = widget.user == null
+        ? ["clear", isAdmnin ? "manage" : "exit"]
+        : ["", "clear"];
     return WillPopScope(
       onWillPop: () async {
         setState(() {
@@ -246,7 +381,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                               child: Row(children: [
                                 IconButton(
                                     onPressed: () {
-                                      Navigator.pop(context);
+                                      setState(() {
+                                        stopOnlineCheck = true;
+                                      });
+                                      if (widget.fromDetails) {
+                                        Navigator.pop(context);
+                                        Navigator.pop(context);
+                                        Navigator.pop(context);
+                                      } else {
+                                        Navigator.pop(context);
+                                      }
                                     },
                                     icon: const Icon(
                                         Icons.arrow_back_ios_new_outlined,
@@ -259,14 +403,16 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                     height: 40,
                                     decoration: BoxDecoration(
                                       image: DecorationImage(
-                                          image: isNumeric(widget.user[0])
+                                          image: widget.user == null
                                               ? MemoryImage(groupsIcon.get(
-                                                          "${widget.user[0]}") ==
+                                                          widget.group!.grpId
+                                                              .toString()) ==
                                                       null
                                                   ? groupsIcon
                                                       .get("groupDefault")!
-                                                  : groupsIcon.get(
-                                                      "${widget.user[0]}")!)
+                                                  : groupsIcon.get(widget
+                                                      .group!.grpId
+                                                      .toString())!)
                                               : MemoryImage(groupsIcon
                                                   .get("userDefault")!),
                                           fit: BoxFit.fill),
@@ -276,16 +422,24 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                 ),
                                 GestureDetector(
                                   onTap: () {
-                                    if (isNumeric(widget.user[0])) {
+                                    if (groupMemb.isNotEmpty) {
                                       Navigator.of(context)
                                           .push(MaterialPageRoute(
                                         builder: (context) => GroupInfo(
-                                          user: widget.user,
-                                          groupMembers: groupMemb,
-                                          gropAdmins: groupAdm,
+                                          isAdmin: isAdmnin,
+                                          grpId: widget.group!.grpId.toString(),
                                         ),
-                                      ));
+                                      ))
+                                          .then((value) {
+                                        //update chat room
+                                        setState(() {
+                                          // filterGroupDetails();
+                                          groupsIcon =
+                                              Hive.box<Uint8List>("groups");
+                                        });
+                                      });
                                     }
+
                                     // print("header tapped.....................");
                                   },
                                   child: Row(
@@ -302,9 +456,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                                   0.58,
                                               height: 18,
                                               child: Text(
-                                                isNumeric(widget.user[0])
-                                                    ? "${widget.user[1]} "
-                                                    : "${widget.user[1]} ${widget.user[2]}",
+                                                widget.user == null
+                                                    ? "${widget.group!.name} "
+                                                    : "${widget.user!.name}",
                                                 overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(
                                                     fontSize: 16,
@@ -314,7 +468,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                             Padding(
                                               padding: const EdgeInsets.only(
                                                   top: 8.0, left: 8),
-                                              child: isNumeric(widget.user[0])
+                                              child: widget.user == null
                                                   ? SizedBox(
                                                       width:
                                                           MediaQuery.of(context)
@@ -327,12 +481,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                                             groupMemb.length,
                                                         itemBuilder:
                                                             (context, index) {
-                                                          List member =
+                                                          MyUser? member =
                                                               groupMemb[index];
+
                                                           return Text(
-                                                            sender == member[3]
+                                                            sender == member!.id
                                                                 ? "you,"
-                                                                : "${member[0]} ${member[1]},",
+                                                                : "${member.firstName},",
                                                             style: const TextStyle(
                                                                 color: Colors
                                                                     .white,
@@ -350,8 +505,10 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                                                   .size
                                                                   .width *
                                                               0.58,
-                                                      child: const Text(
-                                                        "Last seen 08:00 AM",
+                                                      child: Text(
+                                                        isOnline
+                                                            ? "online"
+                                                            : "last seen $lastSeen",
                                                         overflow: TextOverflow
                                                             .ellipsis,
                                                         style: TextStyle(
@@ -368,12 +525,47 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                   ),
                                 ),
                               ])),
+                              widget.group != null &&
+                                    grpLetfs.get(sender) != null &&
+                                    grpLetfs.get(sender)!.contains(
+                                        widget.group!.grpId.toString())?
+                                        const Text(""):
                           PopupMenuButton(
                             icon: const Icon(Icons.more_vert_rounded,
                                 color: Colors.white),
-                            onSelected: (value) {
+                            onSelected: (value) async {
                               switch (value) {
-                                case "achieve":
+                                case "exit":
+                                  await DialogueBox.showInOutDailog(
+                                      context: context,
+                                      yourWidget: Text(
+                                          "Are you sure you want to left ${widget.name}"),
+                                      secondButton: ElevatedButton(
+                                          style: ElevatedButton.styleFrom(
+                                              backgroundColor:
+                                                  AppColors.appColor),
+                                          onPressed: () {
+                                            Navigator.pop(context);
+                                          },
+                                          child: const Text("no")),
+                                      firstButton: ElevatedButton(
+                                          style: ElevatedButton.styleFrom(
+                                              backgroundColor:
+                                                  AppColors.appColor),
+                                          onPressed: () async {
+                                            leftGroup();
+                                            Navigator.pop(context);
+                                          },
+                                          child: const Text("yes")));
+                                  break;
+                                case "clear":
+                                  if (widget.user == null) {
+                                    //can clear group chat
+                                  } else {
+                                    clearNormalChat();
+                                  }
+
+                                  break;
                               }
                             },
                             itemBuilder: (context) => menuitems
@@ -403,7 +595,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                           padding:
                               EdgeInsets.symmetric(vertical: padd.toDouble()),
                           child: StreamBuilder(
-                            stream: _dataOfferSwitch(),
+                            stream: widget.user == null
+                                ? _dataOfferSwitch()
+                                : directChats(),
                             builder: (context, snapshot) {
                               if (snapshot.hasData) {
                                 return ListView.builder(
@@ -419,40 +613,58 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                         height: 70,
                                       );
                                     } else {
-                                      List my_sms = snapshot.data![index];
                                       // print("all attr 2 ${my_sms[2]} ");
-                                      if (isNumeric(widget.user[0])) {
-                                        if (my_sms[2] != sender) {
-                                          if (my_sms[8]
-                                              .toString()
-                                              .contains(".m4a")) {
-                                                   return AudioBubble(
-                                                filepath: voicePaths!
-                                                    .get(my_sms[0])!, sent: false,);
-                                              }
+                                      // if (index == 1) {
+                                      //   bottomScroll();
+                                      // }
+                                      DateTime now = DateTime.now();
+                                      String formattedDate =
+                                          DateFormat('yyyy-MM-dd').format(now);
+                                      if (widget.user == null) {
+                                        GroupMessage? my_sms =
+                                            snapshot.data![index];
+
+                                        if (my_sms!.sender != sender) {
+                                          if (index ==
+                                              snapshot.data!.length - 1) {
+                                            print(
+                                                "now updating @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@..");
+                                            // updateSender(my_sms.sender);
+                                            UpdateDetails().updateGroupDetails(
+                                                my_sms.msg,
+                                                newSender,
+                                                my_sms.date,
+                                                my_sms.grpId,
+                                                0);
+                                          }
                                           return SwipeTo(
                                             onRightSwipe: () {
                                               setState(() {
                                                 //apaaaaaaaaaaaaaaaaaaaaa
                                                 bottomScroll();
+                                                updateSender(my_sms.sender);
                                                 focusNode.requestFocus();
                                                 focusNode.canRequestFocus =
                                                     true;
                                                 isReplaying = true;
-                                                msgSender = my_sms[2];
-                                                reply_to_msg = my_sms[0];
-                                                replied_msg = my_sms[1];
-                                                repliedFile = my_sms[8];
+                                                msgSender = newSender;
+                                                reply_to_msg =
+                                                    my_sms.msgId.toString();
+                                                replied_msg = my_sms.msg;
+                                                repliedFile = my_sms.fileName;
                                               });
                                             },
-                                            child: my_sms[10] == ""
+                                            child: my_sms.replied == ""
                                                 ? ReceivedMessage(
-                                                    repliedUserName: my_sms[11],
-                                                    receivedFile: my_sms[8],
-                                                    sender: my_sms[2],
+                                                    whoIam: myName,
+                                                    repliedUserName:
+                                                        my_sms.repliedMsgSender,
+                                                    receivedFile:
+                                                        my_sms.fileName,
+                                                    sender: my_sms.sender,
                                                     participants: groupMemb,
                                                     child: Text(
-                                                      "${my_sms[1]}",
+                                                      my_sms.msg,
                                                       style: SafeGoogleFont(
                                                         'SF Pro Text',
                                                         fontSize: 14,
@@ -460,25 +672,30 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                                             FontWeight.w400,
                                                         height: 1.64,
                                                         letterSpacing: 0.5,
-                                                        color:
-                                                            const Color(0xff323643),
+                                                        color: const Color(
+                                                            0xff323643),
                                                       ),
                                                     ),
-                                                    time: my_sms[4],
+                                                    time: my_sms.date,
                                                     replied_status: false,
-                                                    messag: my_sms[1],
-                                                    msgId: my_sms[0],
+                                                    messag: my_sms.msg,
+                                                    msgId:
+                                                        my_sms.msgId.toString(),
                                                     userNow: 1,
                                                   )
                                                 : ReceivedMessage(
-                                                    repliedUserName: my_sms[11],
-                                                    repliedId: my_sms[10],
-                                                    sender: my_sms[2],
+                                                    whoIam: myName,
+                                                    repliedUserName:
+                                                        my_sms.repliedMsgSender,
+                                                    repliedId:
+                                                        my_sms.repliedMsgId,
+                                                    sender: my_sms.sender,
                                                     participants: groupMemb,
-                                                    messag: my_sms[1],
-                                                    msgId: my_sms[0],
+                                                    messag: my_sms.msg,
+                                                    msgId:
+                                                        my_sms.msgId.toString(),
                                                     child: Text(
-                                                      my_sms[1],
+                                                      my_sms.msg,
                                                       style: SafeGoogleFont(
                                                         'SF Pro Text',
                                                         fontSize: 14,
@@ -490,12 +707,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                                             Color(0xff323643),
                                                       ),
                                                     ),
-                                                    time: my_sms[4],
+                                                    time: my_sms.date,
                                                     replied_status: true,
                                                     replied: Column(
                                                       children: [
                                                         Text(
-                                                          "${my_sms[3]}",
+                                                          "${my_sms.replied}",
                                                           style: SafeGoogleFont(
                                                             'SF Pro Text',
                                                             fontSize: 14,
@@ -509,76 +726,144 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                                         ),
                                                       ],
                                                     ),
-                                                    receivedFile: my_sms[8],
+                                                    receivedFile:
+                                                        my_sms.fileName,
                                                     userNow: 1,
                                                   ),
                                           );
                                         } else {
-                                          if (my_sms[8]
-                                              .toString()
-                                              .contains(".m4a")) {
-                                            return AudioBubble(
-                                                filepath: voicePaths!
-                                                    .get(my_sms[0])!, sent: true,);
-                                          } else {
-                                            if (my_sms[10].isNotEmpty &&
-                                                my_sms[10] != "0") {
-                                              print(
-                                                  "replied user name for ${my_sms[1]} is ${my_sms[11]}");
-                                              return SentMessage(
-                                                child: Text(
-                                                  my_sms[1],
-                                                  style: SafeGoogleFont(
-                                                    'SF Pro Text',
-                                                    fontSize: 14,
-                                                    fontWeight: FontWeight.w400,
-                                                    height: 1.6428571429,
-                                                    letterSpacing: 0.5,
-                                                    color:
-                                                        const Color(0xffffffff),
-                                                  ),
-                                                ),
-                                                sent: sent,
-                                                replied: true,
-                                                replymsg: my_sms[3],
-                                                msgId: my_sms[0],
-                                                messag: my_sms[1],
-                                                sentFile: my_sms[8],
-                                                repliedId: my_sms[10],
-                                                repliedUserName: my_sms[11],
-                                              );
-                                            }
+                                          if (my_sms.replied.isNotEmpty &&
+                                              my_sms.replied != "0") {
                                             return SentMessage(
-                                              sentFile: my_sms[8],
-                                              child: Text(
-                                                "${my_sms[1]}",
-                                                style: SafeGoogleFont(
-                                                  'SF Pro Text',
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w400,
-                                                  height: 1.6428571429,
-                                                  letterSpacing: 0.5,
-                                                  color:
-                                                      const Color(0xffffffff),
-                                                ),
+                                              seen: "1",
+                                              child: Column(
+                                                children: [
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            left: 4.0,
+                                                            right: 5),
+                                                    child: Text(
+                                                      my_sms.msg,
+                                                      style: SafeGoogleFont(
+                                                        'SF Pro Text',
+                                                        fontSize: 14,
+                                                        fontWeight:
+                                                            FontWeight.w400,
+                                                        height: 1.6428571429,
+                                                        letterSpacing: 0.5,
+                                                        color: const Color(
+                                                            0xffffffff),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 5,
+                                                            left: 6,
+                                                            right: 4),
+                                                    child: Text(
+                                                        my_sms.date.split(
+                                                                    " ")[0] ==
+                                                                formattedDate
+                                                            ? my_sms.date
+                                                                .split(" ")[1]
+                                                            : my_sms.date
+                                                                .split(" ")[0],
+                                                        style: const TextStyle(
+                                                          fontSize: 12,
+                                                          color: Colors.white70,
+                                                          fontWeight:
+                                                              FontWeight.w400,
+                                                          height: 1.8333333333,
+                                                          letterSpacing: 1,
+                                                        )),
+                                                  ),
+                                                ],
                                               ),
-                                              replied: false,
                                               sent: sent,
-                                              msgId: "${my_sms[0]}",
-                                              messag: my_sms[1],
+                                              replied: true,
+                                              replymsg: my_sms.replied,
+                                              msgId: my_sms.msgId.toString(),
+                                              messag: my_sms.msg,
+                                              sentFile: my_sms.fileName,
+                                              repliedId: my_sms.repliedMsgId,
+                                              repliedUserName:
+                                                  my_sms.repliedMsgSender,
+                                              date: my_sms.date,
                                             );
                                           }
+                                          return SentMessage(
+                                            date: my_sms.date,
+                                            seen: "1",
+                                            sentFile: my_sms.fileName,
+                                            child: Column(
+                                              children: [
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          right: 4.0, left: 4),
+                                                  child: Text(
+                                                    "${my_sms.msg}",
+                                                    style: SafeGoogleFont(
+                                                      'SF Pro Text',
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w400,
+                                                      height: 1.6428571429,
+                                                      letterSpacing: 0.5,
+                                                      color: const Color(
+                                                          0xffffffff),
+                                                    ),
+                                                  ),
+                                                ),
+                                                Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 6,
+                                                            left: 10,
+                                                            right: 3),
+                                                    child: Text(
+                                                        my_sms.date.split(
+                                                                    " ")[0] ==
+                                                                formattedDate
+                                                            ? my_sms.date
+                                                                .split(" ")[1]
+                                                            : my_sms.date
+                                                                .split(" ")[0],
+                                                        style: const TextStyle(
+                                                          fontSize: 12,
+                                                          color: Colors.white70,
+                                                          fontWeight:
+                                                              FontWeight.w400,
+                                                          height: 1.8333333333,
+                                                          letterSpacing: 1,
+                                                        ))),
+                                              ],
+                                            ),
+                                            replied: false,
+                                            sent: sent,
+                                            msgId: "${my_sms.msgId}",
+                                            messag: my_sms.msg,
+                                          );
                                         }
                                         //end group.................
                                       } else {
-                                        if (my_sms[2] == widget.user[0]) {
-                                              if (my_sms[8]
-                                              .toString()
-                                              .contains(".m4a")) {
-                                                   return AudioBubble(
-                                                filepath: voicePaths!
-                                                    .get(my_sms[0])!, sent: false,);
-                                              }
+                                        DirectMessage userMsg =
+                                            snapshot.data![index];
+
+                                        if (userMsg.sender ==
+                                            widget.user!.userId) {
+                                          if (index ==
+                                              snapshot.data!.length - 1) {
+                                            UpdateDetails().updateUserDetails(
+                                                userMsg.msg,
+                                                userMsg.time,
+                                                userMsg.date,
+                                                widget.user!.userId);
+                                            // bottomScroll();
+                                          }
                                           return SwipeTo(
                                             onRightSwipe: () {
                                               setState(() {
@@ -587,18 +872,21 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                                 focusNode.canRequestFocus =
                                                     true;
                                                 isReplaying = true;
-                                                reply_to_msg = my_sms[0];
-                                                replied_msg = my_sms[1];
+                                                reply_to_msg =
+                                                    userMsg.msgId.toString();
+                                                replied_msg = userMsg.msg;
                                               });
                                             },
-                                            child: my_sms[10] == "" ||
-                                                    my_sms[10] == "0"
+                                            child: userMsg.repliedMsgId == "" ||
+                                                    userMsg.repliedMsgId == "0"
                                                 ? ReceivedMessage(
-                                                    receivedFile: my_sms[8],
-                                                    messag: my_sms[1],
-                                                    msgId: my_sms[0],
+                                                    receivedFile:
+                                                        userMsg.fileName,
+                                                    messag: userMsg.msg,
+                                                    msgId: userMsg.msgId
+                                                        .toString(),
                                                     child: Text(
-                                                      "${my_sms[1]}",
+                                                      "${userMsg.msg}",
                                                       style: SafeGoogleFont(
                                                         'SF Pro Text',
                                                         fontSize: 14,
@@ -610,17 +898,20 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                                             Color(0xff323643),
                                                       ),
                                                     ),
-                                                    time: "${my_sms[7]} PM",
+                                                    time: "${userMsg.time} PM",
                                                     replied_status: false,
                                                     userNow: 0,
                                                   )
                                                 : ReceivedMessage(
-                                                    repliedId: my_sms[10],
-                                                    receivedFile: my_sms[8],
-                                                    messag: my_sms[1],
-                                                    msgId: my_sms[0],
+                                                    repliedId:
+                                                        userMsg.repliedMsgId,
+                                                    receivedFile:
+                                                        userMsg.fileName,
+                                                    messag: userMsg.msg,
+                                                    msgId: userMsg.msgId
+                                                        .toString(),
                                                     child: Text(
-                                                      "${my_sms[1]}",
+                                                      "${userMsg.msg}",
                                                       style: SafeGoogleFont(
                                                         'SF Pro Text',
                                                         fontSize: 14,
@@ -632,83 +923,131 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                                             Color(0xff323643),
                                                       ),
                                                     ),
-                                                    time: "${my_sms[7]} PM",
+                                                    time: "${userMsg.time} PM",
                                                     replied_status: true,
-                                                    replied: Column(
-                                                      children: [
-                                                        Text(
-                                                          "${my_sms[4]}",
-                                                          style: SafeGoogleFont(
-                                                            'SF Pro Text',
-                                                            fontSize: 14,
-                                                            fontWeight:
-                                                                FontWeight.w400,
-                                                            height: 1.64,
-                                                            letterSpacing: 0.5,
-                                                            color:
-                                                                Colors.black54,
-                                                          ),
-                                                        ),
-                                                      ],
+                                                    replied: Text(
+                                                      "${userMsg.replied}",
+                                                      style: SafeGoogleFont(
+                                                        'SF Pro Text',
+                                                        fontSize: 14,
+                                                        fontWeight:
+                                                            FontWeight.w400,
+                                                        height: 1.64,
+                                                        letterSpacing: 0.5,
+                                                        color: Colors.black54,
+                                                      ),
                                                     ),
                                                     userNow: 0,
                                                   ),
                                           );
                                         } else {
-                                          if (my_sms[8]
-                                              .toString()
-                                              .contains(".m4a")) {
-                                            return AudioBubble(
-                                                filepath: voicePaths!
-                                                            .get(my_sms[0]) ==
-                                                        null
-                                                    ? ""
-                                                    : voicePaths!
-                                                        .get(my_sms[0])!, sent: true,);
-                                          } else {
-                                            if (my_sms[10] != "" &&
-                                                my_sms[10] != "0") {
-                                              return SentMessage(
-                                                repliedId: my_sms[10],
-                                                sentFile: my_sms[8],
-                                                child: Text(
-                                                  "${my_sms[1]}",
-                                                  style: SafeGoogleFont(
-                                                    'SF Pro Text',
-                                                    fontSize: 14,
-                                                    fontWeight: FontWeight.w400,
-                                                    height: 1.6428571429,
-                                                    letterSpacing: 0.5,
-                                                    color: Color(0xffffffff),
-                                                  ),
-                                                ),
-                                                sent: sent,
-                                                replied: true,
-                                                replymsg: my_sms[4],
-                                                msgId: '${my_sms[0]}',
-                                                messag: my_sms[1],
-                                              );
-                                            }
+                                          if (userMsg.repliedMsgId != "" &&
+                                              userMsg.repliedMsgId != "0") {
                                             return SentMessage(
-                                              sentFile: my_sms[8],
-                                              child: Text(
-                                                "${my_sms[1]}",
-                                                style: SafeGoogleFont(
-                                                  'SF Pro Text',
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w400,
-                                                  height: 1.6428571429,
-                                                  letterSpacing: 0.5,
-                                                  color:
-                                                      const Color(0xffffffff),
-                                                ),
+                                              date: userMsg.date,
+                                              repliedId: userMsg.repliedMsgId,
+                                              sentFile: userMsg.fileName,
+                                              child: Column(
+                                                children: [
+                                                  Text(
+                                                    userMsg.msg,
+                                                    style: SafeGoogleFont(
+                                                      'SF Pro Text',
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w400,
+                                                      height: 1.6428571429,
+                                                      letterSpacing: 0.5,
+                                                      color: Color(0xffffffff),
+                                                    ),
+                                                  ),
+                                                  Padding(
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                              top: 6, left: 10),
+                                                      child: Text(
+                                                          userMsg.date.split(
+                                                                      " ")[0] ==
+                                                                  formattedDate
+                                                              ? userMsg.date
+                                                                  .split(" ")[1]
+                                                              : userMsg.date
+                                                                  .split(
+                                                                      " ")[0],
+                                                          style:
+                                                              const TextStyle(
+                                                            fontSize: 12,
+                                                            color:
+                                                                Colors.white70,
+                                                            fontWeight:
+                                                                FontWeight.w400,
+                                                            height:
+                                                                1.8333333333,
+                                                            letterSpacing: 1,
+                                                          ))),
+                                                ],
                                               ),
-                                              replied: false,
                                               sent: sent,
-                                              msgId: '${my_sms[0]}',
-                                              messag: my_sms[1],
+                                              replied: true,
+                                              replymsg: userMsg.replied,
+                                              msgId: userMsg.msgId.toString(),
+                                              messag: userMsg.msg,
+                                              seen: userMsg.seen,
                                             );
                                           }
+                                          return SentMessage(
+                                            date: userMsg.date,
+                                            seen: userMsg.seen,
+                                            sentFile: userMsg.fileName,
+                                            child: Column(
+                                              children: [
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          left: 4.0, right: 4),
+                                                  child: Text(
+                                                    "${userMsg.msg}",
+                                                    style: SafeGoogleFont(
+                                                      'SF Pro Text',
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w400,
+                                                      height: 1.6428571429,
+                                                      letterSpacing: 0.5,
+                                                      color: const Color(
+                                                          0xffffffff),
+                                                    ),
+                                                  ),
+                                                ),
+                                                Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 6,
+                                                            left: 5,
+                                                            right: 3),
+                                                    child: Text(
+                                                        userMsg.date.split(
+                                                                    " ")[0] ==
+                                                                formattedDate
+                                                            ? userMsg.date
+                                                                .split(" ")[1]
+                                                            : userMsg.date
+                                                                .split(" ")[0],
+                                                        style: const TextStyle(
+                                                          color: Colors.white70,
+                                                          fontSize: 12,
+                                                          fontWeight:
+                                                              FontWeight.w400,
+                                                          height: 1.8333333333,
+                                                          letterSpacing: 1,
+                                                        ))),
+                                              ],
+                                            ),
+                                            replied: false,
+                                            sent: sent,
+                                            msgId: userMsg.msgId.toString(),
+                                            messag: userMsg.msg,
+                                          );
                                         }
                                       }
                                     }
@@ -720,7 +1059,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                     padding: const EdgeInsets.all(13.0),
                                     child: Card(
                                       child: Text(
-                                          "Once Start conversation with ${widget.user[1]} chats will be appeared here"),
+                                          "Once Start conversation with ${widget.user == null ? widget.group!.name : widget.user!.name} chats will be appeared here"),
                                     ),
                                   ),
                                 );
@@ -732,9 +1071,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                     "connection is active can be done any time");
                               } else if (snapshot.connectionState ==
                                   ConnectionState.waiting) {
-                                return const Center(
-                                    child: Text(
-                                        "waiting for connection............"));
+                                return Center(
+                                    child: Center(
+                                  child: CircularProgressIndicator(
+                                    color: AppColors.appColor,
+                                    strokeWidth: 3,
+                                  ),
+                                ));
                               } else {
                                 return Center(
                                   child: CircularProgressIndicator(
@@ -763,7 +1106,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                               decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(30),
                                   color: Colors.grey[700],
-                                  boxShadow: [
+                                  boxShadow: const [
                                     BoxShadow(
                                         color: Color(0xffF3F3F3),
                                         blurRadius: 15,
@@ -777,9 +1120,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                         child: TextFormField(
                                           focusNode: focusNode,
                                           onTap: () async {
-                                            if (await data != null) {
-                                              bottomScroll();
-                                            }
+                                            bottomScroll();
                                             setState(() {
                                               isTyping = true;
                                               shoemoji = false;
@@ -796,8 +1137,6 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                           onChanged: (value) {
                                             setState(() {
                                               int unique = UniqueKey().hashCode;
-                                              // print("changed $unique");
-
                                               focusNode.addListener(() {
                                                 if (shoemoji) {
                                                   focusNode.unfocus();
@@ -915,75 +1254,99 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                                 ),
                               ]),
                             ),
-                            Padding(
-                              padding: const EdgeInsets.only(
-                                  bottom: 10, right: 0, left: 0),
-                              child: (isTyping && message.text.isNotEmpty) ||
-                                      myfile != null
-                                  ? FloatingActionButton(
-                                      onPressed: () async {
-                                        if (await data != null) {
-                                          // print(
-                                          //     "data zipoooooooooooo banaaaaaaaaaaaaaaaaaaaa");
-                                          bottomScroll();
-                                        }
-                                        if ((isTyping && message.text != '') ||
-                                            myfile != null) {
-                                          if (isNumeric(widget.user[0])) {
-                                            sendGroupMessage(message.text);
-                                            // print(
-                                            //     "send group message...............");
-                                          } else {
-                                            // print(
-                                            //     "send direct message...............");
-                                            sendMessage(message.text);
-                                          }
-                                          message.clear();
-                                          setState(() {
-                                            isReplaying = false;
-                                            filesend = false;
-                                          });
-                                        } else {
-                                          print("record audio");
-                                        }
-                                      },
-                                      elevation: 10,
-                                      child: Container(
-                                          height: 50,
-                                          width: 50,
-                                          decoration: BoxDecoration(
-                                              color: AppColors.appColor,
-                                              borderRadius:
-                                                  BorderRadius.circular(30)),
-                                          child: const Center(
-                                            child: Icon(
-                                              Icons.send,
-                                              color: Colors.white,
-                                            ),
-                                          )),
-                                    )
-                                  : RecordButton(
-                                      controller: controller,
-                                      receiver: widget.user[0],
-                                      refresh: () {
-                                        print(
-                                            "refresh called success...........");
-                                        setState(() {
-                                          if (isNumeric(widget.user[0])) {
-                                            data = SecureStorageService()
-                                                .readGrpMsgData("grpMessages",
-                                                    widget.user[0]);
-                                          } else {
-                                            data = SecureStorageService()
-                                                .readMsgData("messages",
-                                                    widget.iam, widget.user[0]);
-                                          }
+                            widget.group != null &&
+                                    grpLetfs.get(sender) != null &&
+                                    grpLetfs.get(sender)!.contains(
+                                        widget.group!.grpId.toString())
+                                ? const Text("already left this group")
+                                : Padding(
+                                    padding: const EdgeInsets.only(
+                                        bottom: 10, right: 0, left: 0),
+                                    child: (isTyping &&
+                                                message.text.isNotEmpty) ||
+                                            myfile != null
+                                        ? FloatingActionButton(
+                                            onPressed: () async {
+                                              if (await data != null) {
+                                                // print(
+                                                //     "data zipoooooooooooo banaaaaaaaaaaaaaaaaaaaa");
+                                                bottomScroll();
+                                              }
+                                              if ((isTyping &&
+                                                      message.text != '') ||
+                                                  myfile != null) {
+                                                if (widget.user == null) {
+                                                  sendGroupMessage(
+                                                      message.text);
+                                                  // print(
+                                                  //     "send group message...............");
+                                                } else {
+                                                  // print(
+                                                  //     "send direct message...............");
+                                                  sendMessage(message.text);
+                                                }
+                                                message.clear();
+                                                setState(() {
+                                                  isReplaying = false;
+                                                  filesend = false;
+                                                });
+                                              } else {
+                                                // print("record audio");
+                                              }
+                                            },
+                                            elevation: 10,
+                                            child: Container(
+                                                height: 50,
+                                                width: 50,
+                                                decoration: BoxDecoration(
+                                                    color: AppColors.appColor,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            30)),
+                                                child: const Center(
+                                                  child: Icon(
+                                                    Icons.send,
+                                                    color: Colors.white,
+                                                  ),
+                                                )),
+                                          )
+                                        : RecordButton(
+                                            controller: controller,
+                                            receiver: widget.user == null
+                                                ? widget.group!.grpId.toString()
+                                                : widget.user!.userId,
+                                            refresh: () {
+                                              // print(
+                                              //     "refresh called success...........");
+                                              int period = 0;
 
-                                          bottomScroll();
-                                        });
-                                      },
-                                    ),
-                            )
+                                              Timer.periodic(
+                                                  const Duration(seconds: 1),
+                                                  (timer) {
+                                                print(
+                                                    "after milliseconds................$period");
+                                                setState(() {
+                                                  period = period + 1;
+                                                  replied_msg = "";
+                                                  reply_to_msg = "";
+                                                  isReplaying = false;
+
+                                                  if (period == 4) {
+                                                    timer.cancel();
+                                                  }
+
+                                                  bottomScroll();
+                                                });
+                                              });
+                                            },
+                                            repliedMsg: replied_msg,
+                                            repliedMsgId: reply_to_msg,
+                                            repliedMsgSender:
+                                                widget.user == null
+                                                    ? msgSender
+                                                    : null,
+                                          ),
+                                  )
                           ],
                         ),
                       ),
@@ -1005,9 +1368,9 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       if (groupMemb.isNotEmpty) {
         for (var pa in groupMemb) {
           // print("compare sender and participants........${pa[3]}");
-          if (pa[3] == msgSender) {
+          if (pa!.id == msgSender) {
             setState(() {
-              msgSender = "${pa[0]} ${pa[1]}";
+              msgSender = pa.firstName;
             });
           }
         }
@@ -1015,8 +1378,8 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     }
     return Container(
       width: 500,
-      margin: const EdgeInsets.only(top: 10, left: 10, right: 10),
-      padding: const EdgeInsets.all(8),
+      margin: const EdgeInsets.only(top: 4, left: 4, right: 4),
+      padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         color: Colors.grey.withOpacity(0.2),
         borderRadius: const BorderRadius.only(
@@ -1026,7 +1389,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         child: Row(
           children: [
             Padding(
-              padding: const EdgeInsets.only(top: 8.0, left: 8, bottom: 8),
+              padding: const EdgeInsets.only(top: 3.0, left: 3, bottom: 3),
               child: Container(
                 color: Colors.green,
                 width: 4,
@@ -1088,8 +1451,12 @@ class _ChatRoomPageState extends State<ChatRoomPage>
                               fit: BoxFit.cover,
                             ),
                           ),
+                if (voicePaths!.get(reply_to_msg) != null)
+                  AudioBubble(
+                    filepath: voicePaths!.get(reply_to_msg)!,
+                  ),
                 SizedBox(
-                  height: 8,
+                  height: 4,
                 ),
                 Text(
                   "$msg",
@@ -1182,14 +1549,15 @@ class _ChatRoomPageState extends State<ChatRoomPage>
             shoemoji = false;
             focusNode.requestFocus();
           });
-          print(emoji);
+          // print(emoji);
         },
       ),
     );
   }
 
   void sendMessage(messag) async {
-    print(message.text);
+
+    // print(message.text);
     String msgId = DateTime.now().millisecondsSinceEpoch.toString();
     while (await FirebaseService().checkIfMsgExist(msgId)) {
       // print("msg existssssssssssss ipo ");
@@ -1225,88 +1593,65 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       attributes.add("0");
     }
     attributes.add(repliedMsgId);
-    List localAttr = attributes;
-    print("apaaaaaaaaaaaaaaaaa attributes $attributes");
-    setState(() {
-      imeingia = 0;
-      isReplaying = false;
-      reply_to_msg = "";
-      replied_msg = "";
-      filesend = false;
-      // myfile = null;
-
-      fileSize = 0;
-      filename = "";
-      focusNode.canRequestFocus = false;
-    });
-    print("apaaaaaaaaaaaaaaaaa aftere state   attributes $attributes");
-    // sends!.put(msgId, attributes);
     List msgs = [];
 
-    List messgs = await SecureStorageService().readAllMsgData("messages");
-    if (messgs.isNotEmpty) {
-      for (var x = 0; x < messgs.length; x++) {
-        msgs.add(messgs[x]);
+    msgs.add(attributes);
+    DirectMessage directMsg = DirectMessage(
+        msgId: int.parse(attributes[0]),
+        msg: attributes[1],
+        sender: attributes[2],
+        receiver: attributes[3],
+        replied: attributes[4],
+        repliedMsgId: attributes[10],
+        seen: attributes[5],
+        time: now,
+        date: nowDate,
+        fileName: attributes[8],
+        msgFile: "0",
+        fileSize: attributes[9]);
+    int result = await DirMsgsHelper().insert(directMsg);
+    if (result > 0) {
+      print("data inserted successfully..........");
+      bottomScroll();
+      DirectMessage? result2 =
+          await DirMsgsHelper().queryById(int.parse(msgId));
+      if (result2 != null) {
+        UpdateDetails().updateUserDetails(
+            result2.msg, result2.time, result2.date, widget.user!.userId);
+        print(
+            "data inserted is ${result2.msg}...with id ${result2.msgId}.......");
+        setState(() {
+          bottomScroll();
+          imeingia = 0;
+          isReplaying = false;
+          reply_to_msg = "";
+          replied_msg = "";
+          filesend = false;
+          // myfile = null;
+          fileSize = 0;
+          filename = "";
+          focusNode.canRequestFocus = true;
+        });
       }
-
-      msgs.add(attributes);
-
-      Message mysms = Message("messages", msgs);
-      await SecureStorageService().writeMsgData(mysms);
-      setState(() {
-        data = SecureStorageService().readMsgData("messages", sender, receiver);
-      });
-    } else {
-      msgs.add(attributes);
-
-      Message mysms = Message("messages", msgs);
-      await SecureStorageService().writeMsgData(mysms);
-      setState(() {
-        data = SecureStorageService().readMsgData("messages", sender, receiver);
-      });
     }
+
     attributes.insert(8, "0");
     attributes.insert(9, "0");
     if (myfile != null && fileBytes != null) {
-      print(
-          "now going to send file to firebase...........,,,,,,,,,,sssssssssssssshhhhhhhhhhssssssssssssss..");
-      // ignore: use_build_context_synchronously
-      await FirebaseService()
-          .sendFiletofirebase(msgId, myfile!, attributes, context);
+      File? file2 = myfile;
+      Uint8List? bytesZake = fileBytes;
       setState(() {
         myfile = null;
         fileBytes = null;
       });
+      FirebaseService()
+          .sendFiletofirebase(msgId, file2!, attributes, context)
+          .then((value) {});
     } else {
-      print(
-          "now going to send normal text to firebase...........,,sssssssssssssshhhhhhhhhhssssssssssssss...");
-
+      // await FirebaseService().usersSentMsgsToMe();
       await FirebaseService().sendMessage(attributes);
+      isUserOnline();
     }
-
-    setState(() {
-      data = SecureStorageService()
-          .readMsgData("messages", widget.iam, widget.user[0]);
-    });
-    setState(() {
-      bottomScroll();
-    });
-    // if (reply_to_msg != "" || isReplaying) {
-    //   print("return defaults");
-    //   setState(() {
-    //     imeingia = 0;
-    //     isReplaying = false;
-    //     reply_to_msg = "";
-    //     replied_msg = "";
-    //     filesend = false;
-    //     myfile = null;
-    //     fileBytes = null;
-    //     fileSize = 0;
-    //     filename = "";
-    //     focusNode.canRequestFocus = false;
-    //   });
-    // }
-    // loadUsersMsgs();
   }
 
   File? myfile;
@@ -1325,7 +1670,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
       focusNode.requestFocus();
       focusNode.canRequestFocus = true;
       if (file.extension == "pdf") {}
-      print("file btes setted........");
+      // print("file btes setted........");
     });
   }
 
@@ -1345,7 +1690,7 @@ class _ChatRoomPageState extends State<ChatRoomPage>
 
     DateFormat format = DateFormat("yyyy-MM-dd HH:mm");
     var nowDate = format.format(DateTime.now());
-    String groupId = widget.user[0];
+    String groupId = widget.group!.grpId.toString();
     List seen = [];
     List userMsg = [];
     List<dynamic> logged = await SecureStorageService().readByKeyData("user");
@@ -1375,24 +1720,43 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     attributes.add(reply_to_msg);
     attributes.add(msgSender);
 
-    List grpMsgs = await SecureStorageService().readModalData("grpMessages");
     attributes.removeAt(8);
-    grpMsgs.add(attributes);
-    Modal modal = Modal("grpMessages", grpMsgs);
-    await SecureStorageService().writeModalData(modal);
+    GroupMessage grpMsg = GroupMessage(
+        msgId: int.parse(attributes[0]),
+        msg: attributes[1],
+        sender: attributes[2],
+        grpId: groupId,
+        replied: replied_msg,
+        repliedMsgId: reply_to_msg,
+        date: nowDate,
+        fileName: attributes[8],
+        msgFile: "0",
+        fileSize: attributes[9],
+        repliedMsgSender: msgSender);
+    int result = await GrpMsgsHelper().insert(grpMsg);
+    if (result > 0) {
+      bottomScroll();
+      print("grp msg inserted successfully..........");
+      UpdateDetails().updateGroupDetails(
+          attributes[1], "you", nowDate, widget.group!.grpId.toString(), 0);
+      setState(() {
+        bottomScroll();
+        imeingia = 0;
+        isReplaying = false;
+        reply_to_msg = "";
+        replied_msg = "";
+        filesend = false;
+        fileSize = 0;
+        filename = "";
+        focusNode.canRequestFocus = true;
+      });
+    }
     File? myfile2 = myfile;
 
     setState(() {
       filesend = false;
       myfile = null;
       fileBytes = null;
-    });
-    setState(() {
-      data =
-          SecureStorageService().readGrpMsgData("grpMessages", widget.user[0]);
-    });
-    setState(() {
-      bottomScroll();
     });
     if (replied_msg != "" || isReplaying) {
       setState(() {
@@ -1405,12 +1769,13 @@ class _ChatRoomPageState extends State<ChatRoomPage>
         fileBytes = null;
         fileSize = 0;
         filename = "";
-        focusNode.canRequestFocus = false;
+        focusNode.canRequestFocus = true;
       });
     }
     // loadGrpMsgs();
 
     attributes.insert(8, "0");
+    // await FirebaseService().groupMsgsDetails();
     await GroupService().saveGrpMessages(attributes, myfile2);
   }
 }

@@ -145,8 +145,8 @@ class SecureStorageService {
 
   Future<void> deleteByKeySecureData(String key) async {
     await _secureStorage.delete(key: key, aOptions: _getAndroidOptions());
-    print(
-        "deleted......................................................... $key");
+    // print(
+    //     "deleted......................................................... $key");
   }
 
   //checkif key exists
@@ -179,7 +179,7 @@ class SecureStorageService {
 
 class StorageItem {
   final String key;
-  final List<String> value;
+  final List value;
 
   StorageItem(this.key, this.value);
 }

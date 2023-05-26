@@ -9,6 +9,8 @@ import 'package:tuchati/services/secure_storage.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import 'friendCard2.dart';
+
 class Addparticipant extends StatefulWidget {
   const Addparticipant({super.key});
 
@@ -20,15 +22,11 @@ class _AddparticipantState extends State<Addparticipant> {
   Future<List>? data;
 
   late Timer timer;
-  loadContacts() async {
-    await MyContacts().phoneContacts();
-  }
 
   useTimer() {
     timer = Timer(
       const Duration(seconds: 55),
       () {
-        loadContacts();
         setState(() {
           data = SecureStorageService().readCntactsData("contacts");
         });
@@ -107,7 +105,7 @@ class _AddparticipantState extends State<Addparticipant> {
                 future: data,
                 builder: (context, snapshot) {
                   if (snapshot.hasData) {
-                    print("has data ${snapshot.data!.length}");
+                    // print("has data ${snapshot.data!.length}");
 
                     if (snapshot.data!.length == 0) {
                       return const Center(
@@ -130,17 +128,17 @@ class _AddparticipantState extends State<Addparticipant> {
                             setState(()  {
                               
                               if (selected.contains(contactt[0])) {
-                                print("remove ..");
+                                // print("remove ..");
                                 selected.remove(contactt[0]);
                                 selectedUsers.remove(user[0]);
                               } else {
-                                print("add ..");
+                                // print("add ..");
                                 selectedUsers.add(user[0]);
                                 selected.add(contactt[0]);
                               }
                             });
                           },
-                          child: FriendCard(
+                          child: FriendCard2(
                             contact: contactt,
                             selected: selected,
                           ),
